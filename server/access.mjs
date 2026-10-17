@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { isIP } from 'node:net';
 const loopback=address=>['127.0.0.1','::1','::ffff:127.0.0.1'].includes(address);
 export const isPrivateIPv4=address=>typeof address==='string'&&isIP(address)===4&&(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address)||/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(address));
+export function normalizeBindAddress(address){return typeof address==='string'&&address.startsWith('::ffff:')?address.slice(7):address||'';}
+export function isTrustedBindAddress(address){const normalized=normalizeBindAddress(address);return loopback(address)||loopback(normalized)||isPrivateIPv4(normalized);}
 const same=(a,b)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 export async function createAccess(dataDir,port,host){
   const path=join(dataDir,'access.json');let credentials;
@@ -15,7 +17,8 @@ export async function createAccess(dataDir,port,host){
   const lan=host==='0.0.0.0',hosts=new Set([`127.0.0.1:${port}`,`localhost:${port}`,`[::1]:${port}`,...(lan?ips.map(ip=>`${ip}:${port}`):[])]);
   const sessions=new Map();
   function local(req){return loopback(req.socket.remoteAddress)&&new Set([`127.0.0.1:${port}`,`localhost:${port}`,`[::1]:${port}`]).has(req.headers.host);}
-  function allowed(req){return hosts.has(req.headers.host)&&(!req.headers.origin||hosts.has(req.headers.origin.replace(/^http:\/\//,''))&&req.headers.origin.startsWith('http://'))&&req.headers['sec-fetch-site']!=='cross-site';}
+  function originAllowed(origin){if(!origin)return true;if(!origin.startsWith('http://'))return false;return hosts.has(origin.slice('http://'.length));}
+  function allowed(req){return isTrustedBindAddress(req.socket?.localAddress)&&hosts.has(req.headers.host)&&originAllowed(req.headers.origin)&&req.headers['sec-fetch-site']!=='cross-site';}
   function tokenRole(token){for(const role of ['reader','editor'])if(same(token,credentials[role]))return role;return null;}
   function principal(req){
     const auth=req.headers.authorization;

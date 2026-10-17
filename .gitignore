@@ -16,6 +16,13 @@ __pycache__/
 .runtime/
 .env
 .env.*
+*.pem
+*.key
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
+notify.json
 
 work-probe.mjs
 work-frontend-probe/

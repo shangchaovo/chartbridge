@@ -10,6 +10,6 @@
 - **MCP TypeScript SDK** — `@modelcontextprotocol/server` / `core` 2.3.1，`node` 2.1.1，Apache-2.0；来源：https://github.com/modelcontextprotocol/typescript-sdk 。完整许可证保留于 `licenses/MCP-*.txt`。
 - **ws 8.22.0 / Zod 4.6.7 / Hono / @hono/node-server** — MIT；许可证原样保留于 `licenses/`，作为 WebSocket 和 MCP 依赖使用。
 
-- **TqSDK 3.10.2（可选）** — 独立安装在外盘 `.venv-tqsdk/`，版本与依赖见 `requirements-tqsdk.txt`；上游：https://github.com/shinnytech/tqsdk-python 。包内许可证原样保留于 `licenses/TqSDK-*.txt`，账户数据权限由上游账户授权决定。
+- **TqSDK 3.10.2（可选）** — 如需国内期货账户桥，安装到未跟踪的 `.venv-tqsdk/`，版本与依赖见 `requirements-tqsdk.txt`；上游：https://github.com/shinnytech/tqsdk-python 。包内许可证原样保留于 `licenses/TqSDK-*.txt`，账户数据权限由上游账户授权决定。
 
 第三方各自保留版权与许可证。行情为 Yahoo Finance、Binance 与新浪的外部数据，软件开源许可不授予行情再分发权。源代码可在本机项目目录直接查看；未将本终端公开部署。

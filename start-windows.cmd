@@ -1,4 +1,5 @@
 @echo off
+rem Private LAN / Tailscale. For localhost only, use start-local-windows.cmd.
 chcp 65001 >nul
 setlocal
 cd /d "%~dp0"

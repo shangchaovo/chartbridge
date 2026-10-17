@@ -62,7 +62,7 @@ test('后台提醒需求在没有页面客户端时也生成订阅流，客户�
   const sockets=[];
   const hub=new MarketHub({socketFactory:url=>{const socket=new Socket();socket._url=url;sockets.push(socket);return socket;},publicQuotes:async()=>[]});
   try{
-    hub.setBackgroundSymbols(['BTCUSDT','OKX:SUI-USDT']);
+    hub.setBackgroundSymbols(['BTCUSDT','OKX:SUI-USDT','../secret','not a symbol']);
     assert.deepEqual([...hub.wanted().symbols].sort(),['BTCUSDT','OKX:SUI-USDT']);
     hub.reconcile();
     const binance=sockets.find(s=>s._url==='wss://data-stream.binance.vision:443/ws');

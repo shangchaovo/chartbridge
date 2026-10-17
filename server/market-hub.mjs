@@ -89,7 +89,7 @@ export class MarketHub {
   }
   // 后台盯盘需求：提醒存在时即使没有浏览器客户端也保持对应行情订阅。
   setBackgroundSymbols(symbols){
-    const next=new Set((Array.isArray(symbols)?symbols:[]).map(s=>String(s||'').trim().toUpperCase()).filter(s=>s&&s.length<=50));
+    const next=new Set((Array.isArray(symbols)?symbols:[]).map(s=>String(s||'').trim().toUpperCase()).filter(s=>/^(?=.{1,50}$)(?!.*\.\.)[A-Z0-9^][A-Z0-9.@^=:_/-]*$/.test(s)));
     if([...next].sort().join()===[...this.background].sort().join())return false;
     this.background=next;this.reconcile();return true;
   }

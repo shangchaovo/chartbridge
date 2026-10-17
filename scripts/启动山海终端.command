@@ -1,16 +1,19 @@
 #!/bin/zsh
 set -euo pipefail
-export PATH="/Users/xieshangchao/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
-terminal_project="/Volumes/extradata/Projects/tradingview-local"
+terminal_root="$(cd "$(dirname "$0")/.." && pwd)"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+terminal_project="$terminal_root"
 terminal_url="http://127.0.0.1:18765/"
 export TERMINAL_HOST="${TERMINAL_HOST:-127.0.0.1}"
 terminal_open_browser=1
 if [[ "${1:-}" == "--no-open" ]]; then terminal_open_browser=0; fi
-terminal_uuid="$(/usr/sbin/diskutil info -plist /Volumes/extradata 2>/dev/null | /usr/bin/plutil -extract DiskUUID raw -o - - 2>/dev/null || true)"
-if [[ "$terminal_uuid" != "2AA45A36-F3AF-4818-BD38-BF9A293ABBA9" ]]; then
-  print "请连接外接盘 extradata（指定卷 UUID 不匹配或尚未挂载）。"
-  read -k 1 "?按任意键退出。"
-  exit 1
+if [[ -n "${SHANHAI_VOLUME_UUID:-}" ]]; then
+  terminal_uuid="$(/usr/sbin/diskutil info -plist "$terminal_root" 2>/dev/null | /usr/bin/plutil -extract DiskUUID raw -o - - 2>/dev/null || true)"
+  if [[ "$terminal_uuid" != "$SHANHAI_VOLUME_UUID" ]]; then
+    print "项目所在卷的 UUID 与 SHANHAI_VOLUME_UUID 不一致。"
+    read -k 1 "?按任意键退出。"
+    exit 1
+  fi
 fi
 cd "$terminal_project"
 if [[ -f work/windows-host.json && "${SHANHAI_RUN_ON_MAC:-0}" != "1" ]]; then
@@ -27,7 +30,7 @@ if [[ -n "$terminal_running_mode" ]]; then
   exit 0
 fi
 if [[ ! -f node_modules/pinets/package.json || ! -f node_modules/klinecharts/package.json || ! -f node_modules/@modelcontextprotocol/server/package.json || ! -f node_modules/ws/package.json ]]; then
-  print "首次启动，正在安装项目自己的依赖到外盘…"
+  print "首次启动，正在安装本项目自己的依赖…"
   npm ci --cache .npm-cache --ignore-scripts --no-fund --no-audit
 fi
 if [[ "$terminal_open_browser" == 1 ]]; then

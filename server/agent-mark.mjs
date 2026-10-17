@@ -20,9 +20,16 @@ export function mergeAgentConfig(saved, incoming = {}, env = process.env) {
   return { apiKey, baseUrl, model };
 }
 
+const METADATA_HOSTS = new Set(['metadata.google.internal', 'metadata.google.internal.']);
+
 export function chatCompletionsUrl(baseUrl) {
   const url = new URL(baseUrl);
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('接口地址只支持 http 或 https。');
+  if (url.username || url.password) throw new Error('接口地址不能包含账号或密码。');
+  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (METADATA_HOSTS.has(host) || host === '169.254.169.254' || host === '169.254.170.2') {
+    throw new Error('接口地址不能指向云元数据服务。');
+  }
   const path = url.pathname.replace(/\/$/, '');
   if (!path.endsWith('/chat/completions')) url.pathname = `${path}/chat/completions`;
   return url;
@@ -87,6 +94,7 @@ export async function requestAnnotations({ config, symbol, interval, candles, fe
         { role: 'user', content: JSON.stringify({ symbol, interval, lastClose: last.c, bars: brief }) },
       ],
     }),
+    redirect: 'error',
     signal: AbortSignal.timeout(30000),
   });
   const payload = await response.json().catch(() => ({}));

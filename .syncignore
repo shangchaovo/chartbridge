@@ -14,6 +14,13 @@
 /.stversions
 .env
 .env.*
+*.pem
+*.key
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
+notify.json
 __pycache__
 *.pyc
 *.log

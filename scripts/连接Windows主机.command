@@ -3,7 +3,7 @@ set -euo pipefail
 terminal_label="local.shanhai.windows-tunnel"
 terminal_domain="gui/$(/usr/bin/id -u)"
 if ! /bin/launchctl print "$terminal_domain/$terminal_label" >/dev/null 2>&1; then
-  print "Windows 转发尚未配置，请查看 docs/windows-mac-sync.md。"
+  print "本机还没有名为 local.shanhai.windows-tunnel 的用户 LaunchAgent。"
   exit 1
 fi
 /bin/launchctl kickstart "$terminal_domain/$terminal_label" 2>/dev/null || true

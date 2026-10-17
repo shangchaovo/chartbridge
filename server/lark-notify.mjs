@@ -3,21 +3,33 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveFeishuWebhook, sendFeishuText } from './feishu.mjs';
 
-function larkLaunch() {
-  const script = process.env.LARK_CLI_SCRIPT || (process.env.APPDATA ? join(process.env.APPDATA, 'npm', 'node_modules', '@larksuite', 'cli', 'scripts', 'run.js') : '');
-  if (script && existsSync(script)) return { command: process.execPath, argsPrefix: [script] };
-  return { command: process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli', argsPrefix: [], shell: process.platform === 'win32' };
+export function larkLaunch(env = process.env, exists = existsSync) {
+  const candidates = [];
+  if (env.LARK_CLI_SCRIPT) candidates.push(env.LARK_CLI_SCRIPT);
+  for (const root of [env.APPDATA, env.LOCALAPPDATA]) {
+    if (root) candidates.push(join(root, 'npm', 'node_modules', '@larksuite', 'cli', 'scripts', 'run.js'));
+  }
+  for (const script of candidates) {
+    if (script && exists(script)) return { command: process.execPath, argsPrefix: [script] };
+  }
+  return null;
 }
 
-export function runLark(args, { timeoutMs = 25000, spawnImpl = spawn } = {}) {
-  const launch = larkLaunch();
+function cliArgsAllowed(args) {
+  return Array.isArray(args) && args.every(arg => typeof arg === 'string' && arg.length <= 2000 && !/[\0\r\n%]/.test(arg));
+}
+
+export function runLark(args, { timeoutMs = 25000, spawnImpl = spawn, env = process.env, exists = existsSync } = {}) {
+  if (!cliArgsAllowed(args)) return Promise.resolve({ code: -1, stdout: '', stderr: 'invalid arguments' });
+  const launch = larkLaunch(env, exists);
+  if (!launch) return Promise.resolve({ code: -1, stdout: '', stderr: 'lark-cli script not found' });
   return new Promise(resolve => {
     let child;
     try {
       child = spawnImpl(launch.command, [...launch.argsPrefix, ...args], {
         windowsHide: true,
-        shell: Boolean(launch.shell),
-        env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' },
+        shell: false,
+        env: { ...env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' },
       });
     } catch (error) {
       resolve({ code: -1, stdout: '', stderr: error.message });
@@ -59,12 +71,13 @@ function messageIdOf(body) {
 
 export async function sendViaLarkCli(text, { run = runLark, idempotencyKey = 'shanhai-alert-test' } = {}) {
   const identity = await larkIdentity(run);
-  if (!identity.openId) return { sent: false, reason: 'cli_no_user' };
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(identity.openId || '')) return { sent: false, reason: 'cli_no_user' };
   const as = identity.userReady ? 'user' : identity.botReady ? 'bot' : '';
   if (!as) return { sent: false, reason: 'cli_unavailable' };
+  const idempotency = String(idempotencyKey || 'shanhai-alert').replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 50) || 'shanhai-alert';
   const result = await run([
     'im', '+messages-send', '--as', as, '--user-id', identity.openId,
-    '--text', String(text).slice(0, 2000), '--idempotency-key', String(idempotencyKey).slice(0, 50),
+    '--text', String(text).replace(/[\0\r\n%]/g, ' ').slice(0, 2000), '--idempotency-key', idempotency,
   ]);
   const body = parseLarkJson(result.stdout) || parseLarkJson(result.stderr) || {};
   if (result.code === 10 || body.error?.type === 'confirmation') return { sent: false, reason: 'confirmation_required' };

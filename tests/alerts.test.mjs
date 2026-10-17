@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluateAlerts } from '../src/alerts.js';
 import { resolveFeishuWebhook, sendFeishuText } from '../server/feishu.mjs';
-import { sendViaLarkCli } from '../server/lark-notify.mjs';
+import { EventEmitter } from 'node:events';
+import { sendViaLarkCli, runLark } from '../server/lark-notify.mjs';
 import { alertMessage, createPriceAlerts, mergeFiredAlerts } from '../server/price-alerts.mjs';
 import { QUOTE_POLL_MS } from '../server/market-hub.mjs';
 
@@ -53,8 +54,10 @@ test('feishu webhook is refused unless it is a bot hook, and a missing hook is n
   assert.equal(missing.sent, false);
   assert.equal(missing.reason, 'missing_webhook');
   assert.equal(called, 0);
-  const sent = await sendFeishuText(target, '【测试】山海', async () => ({ ok: true, json: async () => ({ code: 0, StatusCode: 0 }) }));
+  let options;
+  const sent = await sendFeishuText(target, '【测试】山海', async (_url, init) => { options = init; return { ok: true, json: async () => ({ code: 0, StatusCode: 0 }) }; });
   assert.equal(sent.sent, true);
+  assert.equal(options.redirect, 'error');
 });
 
 test('lark-cli delivery counts as sent only when the CLI returns a message id', async () => {
@@ -74,6 +77,35 @@ test('lark-cli delivery counts as sent only when the CLI returns a message id', 
   const unavailable = await sendViaLarkCli('【测试】山海', { run: async () => ({ code: 0, stdout: JSON.stringify({ identities: { user: { available: false, openId: 'ou_test' }, bot: { available: false } } }), stderr: '' }) });
   assert.equal(unavailable.sent, false);
   assert.equal(unavailable.reason, 'cli_unavailable');
+});
+
+test('lark-cli is started without a shell and refuses command-line breakout text', async () => {
+  let seen;
+  const result = await runLark(['auth', 'status', '--json'], {
+    exists: () => true,
+    env: { LARK_CLI_SCRIPT: 'C:/lark/run.js' },
+    spawnImpl(command, args, options) {
+      seen = { command, args, shell: options.shell };
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.equal(seen.shell, false);
+  assert.equal(seen.command, process.execPath);
+  assert.deepEqual(seen.args.slice(1), ['auth', 'status', '--json']);
+  let spawned = false;
+  const rejected = await runLark(['im', '--text', 'price%\r\ncalc'], {
+    exists: () => true,
+    env: { LARK_CLI_SCRIPT: 'C:/lark/run.js' },
+    spawnImpl() { spawned = true; throw new Error('should not spawn'); },
+  });
+  assert.equal(spawned, false);
+  assert.equal(rejected.code, -1);
 });
 
 test('public quotes are polled in a few seconds rather than once a minute', () => {

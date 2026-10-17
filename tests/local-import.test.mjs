@@ -18,6 +18,9 @@ test('agent status hides the key and annotations stay near the real close', () =
   assert.equal('apiKey' in publicAgentStatus({ apiKey: '', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' }), false);
   assert.match(publicAgentStatus({ apiKey: '', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' }).missing[0], /API key/);
   assert.equal(chatCompletionsUrl('https://api.openai.com/v1').pathname, '/v1/chat/completions');
+  assert.equal(chatCompletionsUrl('http://127.0.0.1:11434/v1').pathname, '/v1/chat/completions');
+  assert.throws(() => chatCompletionsUrl('https://user:secret@api.openai.com/v1'), /账号或密码/);
+  assert.throws(() => chatCompletionsUrl('http://169.254.169.254/latest'), /元数据/);
   const marks = parseAgentAnnotations('{"annotations":[{"kind":"hline","price":101,"text":"压力"},{"kind":"hline","price":1,"text":"离谱"}]}', 100);
   assert.equal(marks.length, 1);
   assert.equal(marks[0].text, '压力');

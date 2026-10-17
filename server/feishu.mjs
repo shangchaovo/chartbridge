@@ -44,6 +44,7 @@ export async function sendFeishuText(target, text, fetchImpl = fetch) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
+      redirect: 'error',
       signal: AbortSignal.timeout(8000),
     });
   } catch {

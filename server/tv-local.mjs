@@ -106,9 +106,15 @@ export function scanTradingViewLocal(env = process.env) {
     for (const item of chunk.ignored) ignored.add(item);
   }
   if (!indicators.length) ignored.add('指标参数');
+  const home = env.USERPROFILE || env.HOME || '';
+  const redact = value => {
+    const text = String(value || '');
+    if (home && text.toLowerCase().startsWith(home.toLowerCase())) return text.slice(home.length).replace(/^[/\\]+/, '') || '本机目录';
+    return text;
+  };
   return {
-    searched: bucket.searched,
-    sources: bucket.sources,
+    searched: bucket.searched.map(item => ({ ...item, path: redact(item.path) })),
+    sources: bucket.sources.map(redact),
     symbols,
     indicators,
     ignored: [...ignored].map(item => `${item}：未导入`),
