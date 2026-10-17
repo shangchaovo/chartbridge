@@ -1,0 +1,26 @@
+{
+  "name": "local-market-terminal",
+  "version": "0.4.1",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "prestart": "node scripts/build.mjs",
+    "start": "node server/index.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "start:lan": "node scripts/start.mjs --lan"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "2.1.1",
+    "@modelcontextprotocol/server": "2.3.1",
+    "klinecharts": "9.8.12",
+    "pinets": "0.11.1",
+    "ws": "8.22.0",
+    "zod": "4.6.7"
+  },
+  "engines": {
+    "node": ">=22.19"
+  }
+}

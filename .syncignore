@@ -1,0 +1,22 @@
+// Shared Syncthing rules for macOS and Windows. Each device loads this file
+// through its local .stignore. Source is shared; runtimes and live data are local.
+/.git
+/node_modules
+/dist
+/data
+/work
+/.npm-cache
+/.pip-cache
+/.venv-tqsdk
+/.runtime
+/tools/node_modules
+/tools/rea-release
+/.stversions
+.env
+.env.*
+__pycache__
+*.pyc
+*.log
+(?d).DS_Store
+(?d)Thumbs.db
+(?d)desktop.ini

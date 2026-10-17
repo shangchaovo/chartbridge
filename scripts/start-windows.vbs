@@ -1,0 +1,7 @@
+Option Explicit
+Dim shell, files, root
+Set shell = CreateObject("WScript.Shell")
+Set files = CreateObject("Scripting.FileSystemObject")
+root = files.GetParentFolderName(files.GetParentFolderName(WScript.ScriptFullName))
+shell.CurrentDirectory = root
+shell.Run "node """ & root & "\scripts\start.mjs"" --lan --no-open --background --dev", 0, False

@@ -1,0 +1,6 @@
+Color coin marks (btc, eth, sol, bnb, xrp, doge, ada) are from
+cryptocurrency-icons 0.18.1, used under the MIT License.
+Copyright (c) 2017 Atomic Labs, Inc.
+
+Company, index, and currency marks are public icons of those
+organizations, stored in this folder so the terminal can show them offline.

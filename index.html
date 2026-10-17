@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0b0f17" />
+  <meta name="description" content="在本机研究全球市场，保存图表，运行 Pine 指标与策略回测。" />
+  <title>山海 · 本地行情研究终端</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2310141c'/%3E%3Cpath d='M6 23 13 9 18 19 23 8 27 23' stroke='%23d4a94e' stroke-width='2' fill='none'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="山海本地行情终端"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 25 12 7 19 21 25 7 30 25"/></svg><span>山海<span class="brand-sub">MARKET TERMINAL</span></span></a>
+      <span class="local-pill"><span class="status-dot"></span>共享研究工作区</span>
+      <div class="topbar-spacer"></div>
+      <button class="icon-button chrome-icon" id="research-button" title="研究记录" aria-label="研究记录"></button>
+      <button class="icon-button chrome-icon" id="collab-button" title="人和 Agent 协作" aria-label="协作"></button>
+      <button class="icon-button chrome-icon" id="theme-button" title="切换明暗主题" aria-label="切换明暗主题"></button>
+      <button class="icon-button chrome-icon" id="export-workspace" title="导出工作区" aria-label="导出工作区"></button>
+      <button class="icon-button chrome-icon" id="save-layout" title="保存布局 · Ctrl S" aria-label="保存布局"></button>
+    </header>
+
+    <section class="chart-toolbar" aria-label="图表工具栏">
+      <button class="symbol-picker" id="symbol-picker"><span id="symbol-mark"></span><span id="symbol-label">BTCUSDT</span><span class="picker-search" aria-hidden="true"></span></button>
+      <span class="divider"></span>
+      <div class="periods" id="periods" role="group" aria-label="K线周期">
+        <button data-interval="1m">1分</button><button data-interval="5m">5分</button><button data-interval="15m">15分</button><button data-interval="30m">30分</button><button data-interval="1h">1时</button><button data-interval="4h">4时</button><button data-interval="1d" class="selected">日</button><button data-interval="1w">周</button>
+      </div>
+      <span class="divider"></span>
+      <button class="icon-button chrome-icon" id="indicators-button" title="技术指标 · Ctrl I" aria-label="技术指标"></button>
+      <button class="icon-button chrome-icon" id="alert-button" title="价格提醒" aria-label="价格提醒"></button>
+      <button class="icon-button chrome-icon" id="replay-button" title="回放" aria-label="回放"></button>
+      <span class="divider"></span>
+      <button class="icon-button history-button" id="undo-drawing" aria-label="撤销画线操作" title="撤销画线操作 · Ctrl/⌘ Z" disabled></button>
+      <button class="icon-button history-button" id="redo-drawing" aria-label="重做画线操作" title="重做画线操作 · Ctrl/⌘ Shift Z" disabled></button>
+      <div class="topbar-spacer"></div>
+      <button class="icon-button chrome-icon" id="chart-type-button" title="图表类型" aria-label="图表类型" aria-haspopup="menu"></button>
+      <select id="chart-type" class="visually-hidden" aria-label="图表类型" tabindex="-1"><option value="candle_solid">蜡烛图</option><option value="area">折线图</option><option value="ohlc">OHLC</option><option value="candle_hollow">空心蜡烛</option></select>
+      <button type="button" id="toggle-research" class="icon-button chrome-icon layout-toggle" aria-pressed="true" aria-controls="research-dock" title="隐藏研究面板" aria-label="隐藏研究面板"></button>
+      <button type="button" id="toggle-watchlist" class="icon-button chrome-icon layout-toggle" aria-pressed="true" aria-controls="watchlist-panel" title="隐藏自选报价" aria-label="隐藏自选报价"></button>
+      <button class="icon-button" id="layout-button" aria-label="切换双图布局" title="单图 / 双图"></button>
+      <button class="icon-button" id="snapshot-button" aria-label="导出图表图片" title="保存图表图片"></button>
+      <button class="icon-button" id="chart-settings-button" aria-label="图表设置" title="图表设置"></button>
+      <button class="icon-button" id="fullscreen-button" aria-label="图表全屏" title="图表全屏"></button>
+    </section>
+
+    <main class="workspace">
+      <nav class="drawing-tools" id="drawing-tools" aria-label="画图工具"></nav>
+      <section class="main-column">
+        <div class="chart-heading">
+          <div class="instrument-title"><span class="instrument-badge" id="instrument-badge">B</span><div><h1 id="instrument-name">比特币 / USDT</h1><span id="instrument-meta">正在连接行情源…</span></div><span class="interval-chip" id="interval-label">1D</span></div>
+          <div class="quote"><strong id="last-price">—</strong><span id="price-change">—</span></div>
+        </div>
+        <div class="ohlc-row" id="ohlc-row"><span>正在加载真实行情…</span></div>
+        <div class="indicator-chips" id="indicator-chips"></div>
+        <div class="chart-area" id="chart-area">
+          <div id="chart" class="chart"></div><div id="chart-secondary" class="chart hidden"></div>
+          <div class="chart-message hidden" id="chart-message" role="status"></div>
+          <div id="drawing-selection" class="drawing-selection hidden" role="toolbar" aria-label="选中的画线">
+            <span id="drawing-selection-label">画线</span>
+            <button type="button" class="icon-button chrome-icon" id="drawing-delete" title="删除 · Delete" aria-label="删除"></button>
+            <button type="button" class="icon-button chrome-icon" id="drawing-lock" title="锁定" aria-label="锁定"></button>
+            <button type="button" class="icon-button chrome-icon" id="drawing-copy" title="复制" aria-label="复制"></button>
+            <button type="button" class="icon-button chrome-icon hidden" id="drawing-edit-text" title="编辑文字" aria-label="编辑文字"></button>
+            <label>颜色<input id="drawing-color" type="color" value="#d4a94e" aria-label="画线颜色"></label>
+            <label>粗细<input id="drawing-width" type="range" min="1" max="4" step="1" value="1" aria-label="画线粗细"></label>
+            <select id="drawing-line-style" aria-label="画线样式"><option value="solid">实线</option><option value="dashed">虚线</option></select>
+          </div>
+          <div class="chart-watermark">山海 <span>LOCAL RESEARCH</span></div>
+        </div>
+        <div class="replay-strip hidden" id="replay-strip">
+          <button id="replay-play" class="icon-button chrome-icon" aria-label="播放或暂停回放"></button>
+          <button id="replay-next" class="icon-button chrome-icon" title="下一根" aria-label="下一根"></button>
+          <input type="range" id="replay-slider" min="20" max="500" value="250" aria-label="回放位置" />
+          <time id="replay-time"></time>
+          <button id="replay-exit" class="icon-button chrome-icon" title="退出回放" aria-label="退出回放"></button>
+        </div>
+        <div class="chart-footer"><div id="range-buttons"><button data-range="30">1个月</button><button data-range="90">3个月</button><button data-range="180">6个月</button><button data-range="365">1年</button><button data-range="all" class="selected">全部</button></div><span id="timezone-label">Asia/Shanghai · UTC+8</span><span class="layout-toggles"><button type="button" id="module-button" class="icon-button chrome-icon" aria-expanded="false" title="模块" aria-label="模块"></button><button type="button" id="import-local-tv" class="icon-button chrome-icon" title="从本机 TradingView 导入" aria-label="从本机 TradingView 导入"></button><button type="button" id="import-config" class="icon-button chrome-icon import-file" title="从文件导入" aria-label="从文件导入"></button></span><div id="module-menu" class="module-menu hidden"><label><input type="checkbox" data-module="chart" checked> K 线</label><label><input type="checkbox" data-module="watchlist" checked> 自选与报价</label><label><input type="checkbox" data-module="research" checked> 研究面板</label><label><input type="checkbox" data-module="range" checked> 时间范围</label></div><div class="price-scale-controls" role="group" aria-label="价格刻度"><button type="button" class="icon-button chrome-icon selected" data-price-scale="normal" title="线性刻度" aria-label="线性刻度"></button><button type="button" class="icon-button chrome-icon" data-price-scale="log" title="对数刻度" aria-label="对数刻度"></button><button type="button" class="icon-button chrome-icon" data-price-scale="percentage" title="百分比刻度" aria-label="百分比刻度"></button></div><button id="fit-button" class="icon-button chrome-icon" title="适应图表 · Alt G" aria-label="适应图表"></button>        </div>
+
+        <section class="research-dock" id="research-dock" aria-label="研究面板">
+          <div id="research-resizer" class="panel-resizer horizontal" role="separator" tabindex="0" aria-label="调整研究面板高度" aria-orientation="horizontal" aria-controls="research-dock" title="上下拖动调整高度，双击恢复默认"></div>
+          <div class="dock-heading"><h2>研究工作台</h2><span>拖动上边缘调整高度</span><button type="button" class="icon-button" id="hide-research" aria-label="隐藏研究面板" title="隐藏研究面板"></button></div>
+          <div class="dock-body">
+        <section class="agent-dock" id="agent-dock" aria-label="Agent 协作">
+          <div class="agent-dock-head"><h2>协作</h2><span id="agent-key-state">正在检查本机配置</span></div>
+          <form id="agent-form">
+            <label>模型<select id="agent-model" aria-label="模型"></select></label>
+            <label>接口<input id="agent-base" type="url" value="https://api.openai.com/v1" aria-label="OpenAI 兼容接口" spellcheck="false"></label>
+            <label>API key<input id="agent-key" type="password" autocomplete="off" placeholder="留空则用本机已保存的 key" aria-label="API key"></label>
+            <button type="submit" id="agent-run" class="primary" disabled>让 Agent 标注</button>
+          </form>
+          <p id="agent-hint" class="search-hint">缺少 API key 时不会调用模型。</p>
+        </section>
+
+        <section class="research-panel" id="research-panel">
+          <div class="panel-tabs" role="tablist" aria-label="研究工具">
+            <button class="selected" data-tab="backtest" role="tab" aria-selected="true">策略回测 <span class="tab-dot"></span></button>
+            <button data-tab="pine" role="tab" aria-selected="false">Pine 编辑器</button>
+            <button data-tab="data" role="tab" aria-selected="false">行情与数据</button>
+            <button class="hidden" data-tab="accounts" role="tab" aria-selected="false">账户行情</button>
+            <button data-tab="alerts" role="tab" aria-selected="false">价格提醒 <span id="alert-count">0</span></button>
+            <button data-tab="collab" role="tab" aria-selected="false">协作与 Agent</button>
+            <div class="topbar-spacer"></div><span class="panel-caption">计算在本机完成</span>
+          </div>
+          <div class="panel-content" id="panel-content"></div>
+        </section>
+          </div>
+        </section>
+      </section>
+
+      <div id="watchlist-resizer" class="panel-resizer vertical" role="separator" tabindex="0" aria-label="调整自选报价宽度" aria-orientation="vertical" aria-controls="watchlist-panel" title="左右拖动调整宽度，双击恢复默认"></div>
+      <aside class="watchlist-panel" id="watchlist-panel">
+        <div class="watchlist-heading"><h2>自选列表</h2><div class="watchlist-heading-actions"><button class="icon-button" id="add-watchlist" aria-label="添加自选"></button><button type="button" class="icon-button" id="hide-watchlist" aria-label="隐藏自选报价" title="隐藏自选报价"></button></div></div>
+        <div class="market-filters" id="market-filters"><button class="selected" data-market="all">全部</button><button data-market="crypto">加密</button><button data-market="cn">A股</button><button data-market="hk">港股</button><button data-market="us">美股</button><button data-market="etf">ETF</button><button data-market="forex">外汇</button><button data-market="futures">国际期货</button><button data-market="indices">指数</button></div>
+        <div class="watchlist-columns"><span>代码 / 名称</span><span>最近价格</span><span>涨跌幅</span></div>
+        <div id="watchlist" class="watchlist"></div>
+        <div class="watchlist-actions"><button id="refresh-button" class="icon-button chrome-icon" title="刷新行情" aria-label="刷新行情"></button><label class="switch-label"><input id="auto-refresh" type="checkbox" checked /> 自动刷新</label></div>
+        <div class="detail-card" id="instrument-detail"></div>
+        <div class="local-note"><span class="status-dot"></span><div><strong>你的研究，保存在主机</strong><p>布局、脚本、画线与缓存保存在运行主机。在线行情需连接数据源。</p></div></div>
+      </aside>
+    </main>
+    <footer class="statusbar"><span><span class="status-dot" id="connection-dot"></span><span id="connection-status">正在连接</span></span><span id="data-status">—</span><span class="topbar-spacer"></span><span id="clock"></span><span class="version-label">山海 0.4.1 · SYNC</span></footer>
+  </div>
+  <dialog id="modal"><div id="modal-content"></div></dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <input id="csv-file" type="file" accept=".csv,text/csv" hidden />
+  <input id="workspace-file" type="file" accept=".json,application/json" hidden />
+  <input id="tv-import-file" type="file" accept=".json,.txt,.csv,text/plain,application/json" hidden />
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

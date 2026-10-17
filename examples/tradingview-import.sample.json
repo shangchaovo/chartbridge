@@ -1,0 +1,12 @@
+{
+  "name": "山海示例：TradingView 风格自选与布局",
+  "symbols": ["BINANCE:BTCUSDT", "BINANCE:ETHUSDT", "NASDAQ:AAPL", "HKEX:0700"],
+  "symbol": "BINANCE:ETHUSDT",
+  "interval": "240",
+  "chartType": "hollow",
+  "indicators": ["EMA", "VOL"],
+  "indicatorParams": { "EMA": [12, 26] },
+  "studies": ["社区脚本：未公开"],
+  "session": "0930-1600",
+  "adjustment": "splits"
+}

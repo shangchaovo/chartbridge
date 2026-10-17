@@ -1,0 +1,233 @@
+{
+  "date": "2026-10-17",
+  "tool": "rea-agents 6.5.0",
+  "target": "https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT",
+  "official_reference": "https://www.tradingview.com/support/solutions/43000703396-drawing-tools-available-on-tradingview/",
+  "captures": [
+    {
+      "evidence_id": "ev_f3c6947cd110caf9c352869186a3406a125ab96b7cd2a13883b38988bc71e0a9",
+      "request": "work\\rea-ui-20261017\\public-chart-request.json",
+      "evidence": "work\\rea-ui-20261017\\public-chart-evidence.json",
+      "browser": {
+        "mode": "launch",
+        "process_ownership": "provider-owned",
+        "cleanup": "terminated-owned-process",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "duration_ms": 10867,
+      "completeness": {
+        "status": "complete",
+        "equality_eligible": true,
+        "missing_sections": [],
+        "truncated_sections": []
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed"
+        },
+        {
+          "id": "chart-ready",
+          "status": "completed"
+        }
+      ],
+      "observed_menu_rows": {}
+    },
+    {
+      "evidence_id": "ev_ad9d0747af26bf29db415c3bb3965318ea8d3b06bb1c9809282f366ebe442b34",
+      "request": "work\\rea-ui-20261017\\drawing-menus-request.json",
+      "evidence": "work\\rea-ui-20261017\\drawing-menus-evidence.json",
+      "browser": {
+        "mode": "launch",
+        "process_ownership": "provider-owned",
+        "cleanup": "terminated-owned-process",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "duration_ms": 11532,
+      "completeness": {
+        "status": "complete",
+        "equality_eligible": true,
+        "missing_sections": [],
+        "truncated_sections": []
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed"
+        },
+        {
+          "id": "chart-ready",
+          "status": "completed"
+        },
+        {
+          "id": "open-trend",
+          "status": "completed"
+        },
+        {
+          "id": "settle-trend",
+          "status": "completed"
+        },
+        {
+          "id": "close-trend",
+          "status": "completed"
+        },
+        {
+          "id": "open-fib",
+          "status": "completed"
+        },
+        {
+          "id": "settle-fib",
+          "status": "completed"
+        },
+        {
+          "id": "close-fib",
+          "status": "completed"
+        },
+        {
+          "id": "open-measure",
+          "status": "completed"
+        },
+        {
+          "id": "settle-measure",
+          "status": "completed"
+        },
+        {
+          "id": "close-measure",
+          "status": "completed"
+        },
+        {
+          "id": "open-shapes",
+          "status": "completed"
+        },
+        {
+          "id": "settle-shapes",
+          "status": "completed"
+        },
+        {
+          "id": "close-shapes",
+          "status": "completed"
+        },
+        {
+          "id": "open-notes",
+          "status": "completed"
+        },
+        {
+          "id": "settle-notes",
+          "status": "completed"
+        },
+        {
+          "id": "close-notes",
+          "status": "completed"
+        }
+      ],
+      "observed_menu_rows": {
+        "trend": [
+          "Lines",
+          "Trendline",
+          "Ray",
+          "Info line",
+          "Extended line",
+          "Trend angle",
+          "Horizontal line",
+          "Horizontal ray",
+          "Vertical line",
+          "Crossline",
+          "Channels",
+          "Parallel channel",
+          "Regression trend",
+          "Flat top/bottom",
+          "Disjoint channel",
+          "Pitchforks",
+          "Pitchfork",
+          "Schiff pitchfork",
+          "Modified Schiff pitchfork",
+          "Inside pitchfork"
+        ],
+        "fib": [
+          "Fibonacci",
+          "Fib retracement",
+          "Trend-based fib extension",
+          "Fib channel",
+          "Fib time zone",
+          "Fib speed resistance fan",
+          "Trend-based fib time",
+          "Fib circles",
+          "Fib spiral",
+          "Fib speed resistance arcs",
+          "Fib wedge",
+          "Pitchfan",
+          "Gann",
+          "Gann box",
+          "Gann square fixed",
+          "Gann square",
+          "Gann fan"
+        ],
+        "measure": [
+          "Forecasting",
+          "Long position",
+          "Short position",
+          "Position forecast",
+          "Bars pattern",
+          "Ghost feed",
+          "Sector",
+          "Volume-based",
+          "Anchored VWAP",
+          "Fixed range volume profile",
+          "Anchored volume profile",
+          "Measurers",
+          "Price range",
+          "Date range",
+          "Date and price range"
+        ],
+        "shapes": [
+          "Brushes",
+          "Brush",
+          "Highlighter",
+          "Arrows",
+          "Arrow marker",
+          "Arrow",
+          "Arrow mark up",
+          "Arrow mark down",
+          "Shapes",
+          "Rectangle",
+          "Rotated rectangle",
+          "Path",
+          "Circle",
+          "Ellipse",
+          "Polyline",
+          "Triangle",
+          "Arc",
+          "Curve",
+          "Double curve"
+        ],
+        "notes": [
+          "Text and notes",
+          "Text",
+          "Note",
+          "Price note",
+          "Pin",
+          "Table",
+          "Callout",
+          "Comment",
+          "Price label",
+          "Signpost",
+          "Flag mark",
+          "Content",
+          "Image",
+          "Post",
+          "Idea"
+        ]
+      }
+    }
+  ],
+  "scope": "Public anonymous page and five drawing menus. Interaction evidence, not implementation equivalence.",
+  "implemented_tool_count": 22,
+  "remaining": [
+    "freehand brush and arbitrary paths",
+    "Gann and pattern tools",
+    "position and volume profile tools",
+    "complete Pine engine and trading session equivalence"
+  ]
+}

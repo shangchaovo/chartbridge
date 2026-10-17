@@ -1,0 +1,186 @@
+{
+  "tool": "rea-agents",
+  "version": "6.5.0",
+  "evidence_id": "ev_cec1a74e654ffa964c4c96e78dc0df3a6670086479d80896283818a2bda25578",
+  "target": "https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT",
+  "recorded_at_utc": "2026-10-15T05:26:19.504706+00:00",
+  "browser": {
+    "mode": "launch",
+    "process_ownership": "provider-owned",
+    "cleanup": "terminated-owned-process",
+    "product": "Chromium",
+    "version": "155.0.8059.40"
+  },
+  "duration_ms": 15653,
+  "completeness": {
+    "status": "complete",
+    "equality_eligible": true,
+    "missing_sections": [],
+    "truncated_sections": []
+  },
+  "steps": [
+    {
+      "id": "scenario_start",
+      "status": "completed",
+      "action": "goto_start"
+    },
+    {
+      "id": "chart-settle",
+      "status": "completed",
+      "action": "wait_for_timeout"
+    }
+  ],
+  "network": {
+    "retained_events": 2127,
+    "dropped_events": 0,
+    "request_origins": {
+      "https://www.tradingview.com": 7,
+      "https://static.tradingview.com": 656,
+      "https://s3.tradingview.com": 2,
+      "https://scanner-backend.tradingview.com": 2,
+      "https://accounts.google.com": 2,
+      "https://snowplow-pixel.tradingview.com": 3,
+      "https://s3-symbol-logo.tradingview.com": 22,
+      "https://www.googletagmanager.com": 2,
+      "https://scanner.tradingview.com": 1,
+      "https://news-mediator.tradingview.com": 2,
+      "https://analytics.google.com": 4,
+      "https://stats.g.doubleclick.net": 1,
+      "https://ad.doubleclick.net": 2,
+      "https://www.google.com": 2,
+      "https://data.tradingview.com": 1
+    }
+  },
+  "observations": [
+    "公开匿名图表可打开，图表标的BTCUSDT与日线时间周期可见",
+    "顶部周期/图表类型/指标/提醒/回放/布局/保存/截图工具可见",
+    "左侧趋势线/斐波那契/文字/磁吸/锁定/移除工具可见",
+    "右侧自选与多市场报价、底部研究相关入口可见",
+    "周期菜单实际展开，可见分钟、小时、日、周、月等选项",
+    "独立点击指标按钮后，指标/策略对话框实际打开，可见内置指标与社区分类"
+  ],
+  "not_established": [
+    "未获取或恢复服务端Pine源码",
+    "未恢复受保护或付费指标",
+    "未导出或复制TradingView专有图表库",
+    "未证明本地实现与TradingView所有交互或数值等价",
+    "联合周期菜单->指标场景在打开指标步骤超时，不能认定该联合场景成功"
+  ],
+  "limitations": [
+    "Artifact identity is unavailable for this observation.",
+    "Event sequence records provider receipt order; simultaneous browser causality is not inferred.",
+    "Network content is retained only when selected; Playwright response-body bytes are API results and are not guaranteed to match wire bytes.",
+    "Request bytes are limited to what Playwright exposes; not_exposed does not establish body absence or multipart file coverage.",
+    "Network content reads settle within 5 seconds each and the observer does not request bodies from unfinished responses.",
+    "Playwright scenario events do not expose request initiator stacks; receipt order does not prove causality.",
+    "Storage values are hashed only after declared-secret redaction.",
+    "Browser host platform and architecture were not observed."
+  ],
+  "interaction_captures": [
+    {
+      "file": "work/tradingview-interactions-capture.json",
+      "evidence_id": "ev_709fda20886f88b8a5d0e2359f1fdbbe852719d3303258e80d39d2f7d2d983d2",
+      "duration_ms": 47498,
+      "browser": {
+        "mode": "launch",
+        "process_ownership": "provider-owned",
+        "cleanup": "terminated-owned-process",
+        "product": "Chromium",
+        "version": "155.0.8059.40"
+      },
+      "completeness": {
+        "status": "incomplete",
+        "equality_eligible": false,
+        "missing_sections": [
+          "accessibility",
+          "action",
+          "screenshot",
+          "url"
+        ],
+        "truncated_sections": []
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "action": "goto_start",
+          "error": null
+        },
+        {
+          "id": "chart-ready",
+          "status": "completed",
+          "action": "wait_for",
+          "error": null
+        },
+        {
+          "id": "open-timeframes",
+          "status": "completed",
+          "action": "click",
+          "error": null
+        },
+        {
+          "id": "close-timeframes",
+          "status": "completed",
+          "action": "press",
+          "error": null
+        },
+        {
+          "id": "open-indicators",
+          "status": "failed",
+          "action": "click",
+          "error": "Analysis operation timed out after 10000ms: capture_browser_scenario"
+        },
+        {
+          "id": "indicator-settle",
+          "status": "cancelled",
+          "action": "wait_for_timeout",
+          "error": "not executed after an earlier action failure"
+        }
+      ]
+    },
+    {
+      "file": "work/tradingview-indicators-capture.json",
+      "evidence_id": "ev_1d7d2113d1135dd5bd37c4a8a945497ff445a6073d2ec6fa30acb840415f8d77",
+      "duration_ms": 13601,
+      "browser": {
+        "mode": "launch",
+        "process_ownership": "provider-owned",
+        "cleanup": "terminated-owned-process",
+        "product": "Chromium",
+        "version": "155.0.8059.40"
+      },
+      "completeness": {
+        "status": "complete",
+        "equality_eligible": true,
+        "missing_sections": [],
+        "truncated_sections": []
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "action": "goto_start",
+          "error": null
+        },
+        {
+          "id": "indicators-ready",
+          "status": "completed",
+          "action": "wait_for",
+          "error": null
+        },
+        {
+          "id": "open-indicators",
+          "status": "completed",
+          "action": "click",
+          "error": null
+        },
+        {
+          "id": "indicator-settle",
+          "status": "completed",
+          "action": "wait_for_timeout",
+          "error": null
+        }
+      ]
+    }
+  ]
+}
