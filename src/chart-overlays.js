@@ -6,7 +6,7 @@ export function rangeMeasurement(points) {
     elapsed:Number.isFinite(start.timestamp)&&Number.isFinite(end.timestamp)?Math.abs(end.timestamp-start.timestamp):null};
 }
 const line = (coordinates,styles={}) => ({type:'line',attrs:{coordinates},styles});
-const colorOf = overlay => overlay.styles?.line?.color||'#d4a94e';
+const colorOf = overlay => overlay.styles?.line?.color||'#2962ff';
 const number = value => Number(value.toFixed(6)).toLocaleString('en-US',{maximumFractionDigits:6});
 export function registerChartOverlays(register) {
   register({name:'crossLine',totalStep:2,needDefaultPointFigure:true,createPointFigures:({coordinates,bounding})=>coordinates.length?[
@@ -41,7 +41,7 @@ export function registerChartOverlays(register) {
     if(coordinates.length<2)return [];
     const [a,b]=coordinates,m=rangeMeasurement(overlay.points);
     if(!m)return [];
-    const color=m.change>=0?'#3d9b78':'#c45c6a',x=Math.min(a.x,b.x),y=Math.min(a.y,b.y),width=Math.abs(b.x-a.x),height=Math.abs(b.y-a.y);
+    const color=m.change>=0?'#089981':'#f23645',x=Math.min(a.x,b.x),y=Math.min(a.y,b.y),width=Math.abs(b.x-a.x),height=Math.abs(b.y-a.y);
     const parts=[];
     if(name!=='dateRange')parts.push(`${m.change>=0?'+':''}${number(m.change)} (${m.percent===null?'—':m.percent.toFixed(2)+'%'})`);
     if(name!=='priceRange'){

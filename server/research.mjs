@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { z } from 'zod';
+import { MAX_CANDLE_LIMIT } from './market-data.mjs';
 
 const period = z.number().int().min(1).max(500);
 const indicator = z.discriminatedUnion('type', [
@@ -12,7 +13,7 @@ const indicator = z.discriminatedUnion('type', [
 const common = {
   symbol: z.string().regex(/^(?:TQ:[A-Za-z0-9.@^=:_/-]{1,47}|[A-Za-z0-9.^=:_-]{1,40})$/),
   interval: z.enum(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']).default('1d'),
-  limit: z.number().int().min(2).max(1000).default(500),
+  limit: z.number().int().min(2).max(MAX_CANDLE_LIMIT).default(500),
   refresh: z.boolean().default(false),
   tail: z.number().int().min(1).max(1000).default(5),
 };
@@ -72,7 +73,7 @@ export class ResearchService {
     try {
       const payload = await this.candles(new URLSearchParams({ symbol: options.symbol, interval: options.interval, limit: String(options.limit), refresh: options.refresh ? '1' : '0' }));
       const rows = payload.candles;
-      if (!Array.isArray(rows) || !rows.length || rows.length > 1000) throw fail('INVALID_RESEARCH_DATA', '数据源未返回可计算的历史序列。', 502);
+      if (!Array.isArray(rows) || !rows.length || rows.length > MAX_CANDLE_LIMIT) throw fail('INVALID_RESEARCH_DATA', '数据源未返回可计算的历史序列。', 502);
       const closedOnly = kind === 'backtest' || options.closedOnly;
       const selected = rows.filter((bar, index) => !closedOnly || bar.closed === true || (bar.closed === undefined && index < rows.length - 1));
       if (selected.length < 2) throw fail('INSUFFICIENT_RESEARCH_DATA', '可用历史不足两根；未确认的末根 K 线已排除。');

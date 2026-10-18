@@ -6,7 +6,7 @@ export function initPanelLayout() {
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const panels = [
     {id:'research-resizer', key:'shanhai-research-height', css:'--research-height', axis:'y', className:'resizing-height',
-      initial:() => Math.min(340, main.clientHeight * .42),
+      initial:() => Math.min(260, Math.max(180, main.clientHeight * .32)),
       bounds:() => {
         const fixed = [...main.children].filter(el => !el.matches('.chart-area,.research-dock')).reduce((sum, el) => sum + el.getBoundingClientRect().height, 0);
         const max = Math.max(120, main.clientHeight - fixed - (document.body.classList.contains('chart-collapsed') ? 0 : 200));

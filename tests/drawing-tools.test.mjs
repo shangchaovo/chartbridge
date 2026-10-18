@@ -34,7 +34,7 @@ test('every custom and toolbar drawing type is accepted by shared persistence in
   try{
     for(const name of new Set([...DRAWING_TOOLS.map(tool=>tool.name),...custom.map(item=>item.name),'localNote'])){
       assert.ok(SAVED_DRAWING_TYPES.includes(name));
-      const value={...drawing(name),name,visible:false,...(name==='localNote'?{extendData:'中文标注'}:{})};
+      const value={...drawing(name),name,visible:false,...(name==='localNote'?{extendData:'中文标注'}:{}),...(['longPosition','shortPosition'].includes(name)?{points:[{timestamp:1000,value:100},{timestamp:2000,value:name==='longPosition'?95:105},{timestamp:3000,value:name==='longPosition'?110:90}]}:{})};
       const saved=chart.apply('main',{baseRevision:revision,batchId:`batch-${name}`,actor:{id:'user',name:'Tester'},operations:[{type:'upsert_drawing',key:'BTCUSDT|1d',drawing:value}]},{role:'editor',kind:'human'});
       revision=saved.revision;
       assert.equal(saved.state.drawings['BTCUSDT|1d'].find(item=>item.id===name).visible,false);

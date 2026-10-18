@@ -3,6 +3,61 @@ import { join } from 'node:path';
 
 const VENUES = ['BINANCE', 'NASDAQ', 'NYSE', 'AMEX', 'SSE', 'SZSE', 'HKEX', 'TVC', 'FX', 'SP', 'BATS', 'COINBASE', 'BITSTAMP', 'OANDA'];
 
+// Read complete watchlist responses from Chromium's HTTP cache. Fragments from
+// history and chart state are deliberately kept separate from saved watchlists.
+export function extractWatchlists(text) {
+  const source = String(text || '');
+  const lists = [];
+  for (const match of source.matchAll(/"symbols"\s*:\s*\[/g)) {
+    const start = source.lastIndexOf('{', match.index);
+    if (start < 0 || match.index - start > 4096) continue;
+    let depth = 0, quoted = false, escaped = false;
+    for (let end = start; end < Math.min(source.length, start + 200000); end++) {
+      const char = source[end];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') quoted = false;
+        continue;
+      }
+      if (char === '"') quoted = true;
+      else if (char === '{') depth++;
+      else if (char === '}' && --depth === 0) {
+        try {
+          const value = JSON.parse(source.slice(start, end + 1));
+          if (value.id && typeof value.name === 'string' && ['custom', 'colored'].includes(value.type) &&
+              Array.isArray(value.symbols) && value.symbols.every(symbol => typeof symbol === 'string')) {
+            lists.push({ id: String(value.id), name: value.name, type: value.type, active: value.active === true,
+              modified: value.modified || null, symbols: value.symbols.filter(symbol => !symbol.startsWith('###')) });
+          }
+        } catch { /* Ignore incomplete cache blocks. */ }
+        break;
+      }
+    }
+  }
+  return lists;
+}
+
+function scanWatchlistCache(dir) {
+  if (!existsSync(dir)) return [];
+  const latest = new Map();
+  let names;
+  try { names = readdirSync(dir); } catch { return []; }
+  for (const name of names) {
+    if (!/^(?:data_[0-3]|f_[a-f0-9]+|[a-f0-9]{16}_[0-1])$/i.test(name)) continue;
+    const path = join(dir, name);
+    try {
+      if (statSync(path).size > 16_000_000) continue;
+      const bytes = readFileSync(path);
+      for (const list of extractWatchlists(bytes.toString('utf8'))) {
+        const old = latest.get(list.id);
+        if (!old || (Date.parse(list.modified) || 0) >= (Date.parse(old.modified) || 0)) latest.set(list.id, { ...list, source: path });
+      }
+    } catch { /* A running browser may replace a cache block while it is read. */ }
+  }
+  return [...latest.values()];
+}
+
 export function extractChartFragments(text) {
   const source = String(text || '');
   const symbols = [];
@@ -65,11 +120,14 @@ function absorbDir(dir, bucket, options = {}) {
   }
 }
 
-export function scanTradingViewLocal(env = process.env) {
+export function scanTradingViewLocal(env = process.env, { listId } = {}) {
   const appdata = env.APPDATA || '';
   const local = env.LOCALAPPDATA || '';
   const bucket = { searched: [], sources: [], chunks: [] };
   const roaming = join(appdata, 'TradingView');
+  const watchlists = scanWatchlistCache(join(roaming, 'Cache', 'Cache_Data'));
+  const selected = listId ? watchlists.find(list => list.id === String(listId)) :
+    watchlists.find(list => list.name === 'STOCK') || watchlists.filter(list => list.active).sort((a,b) => (Date.parse(b.modified)||0)-(Date.parse(a.modified)||0))[0];
   bucket.searched.push({ path: roaming, exists: existsSync(roaming) });
   absorbDir(join(roaming, 'Local Storage', 'leveldb'), bucket);
   absorbDir(join(roaming, 'IndexedDB'), bucket, { recurse: true });
@@ -114,10 +172,13 @@ export function scanTradingViewLocal(env = process.env) {
   };
   return {
     searched: bucket.searched.map(item => ({ ...item, path: redact(item.path) })),
-    sources: bucket.sources.map(redact),
-    symbols,
-    indicators,
-    ignored: [...ignored].map(item => `${item}：未导入`),
-    found: symbols.length > 0 || indicators.length > 0,
+    sources: selected ? [redact(selected.source)] : bucket.sources.map(redact),
+    symbols: selected?.symbols || [],
+    indicators: [],
+    watchlists: watchlists.map(({ source, ...list }) => list),
+    selectedWatchlist: selected ? { id: selected.id, name: selected.name, modified: selected.modified } : null,
+    fragments: { symbols, indicators },
+    ignored: selected ? [] : ['没有完整的自选清单；历史记录片段未作为自选导入。'],
+    found: Boolean(selected?.symbols.length),
   };
 }

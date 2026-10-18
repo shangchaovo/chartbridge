@@ -1,0 +1,350 @@
+{
+  "date": "2026-10-18",
+  "tool": "rea-agents 6.5.0",
+  "workflow": "captureBrowserScenario / createBrowserScenarioProvider",
+  "capture_scope": "Owned anonymous Chromium via loopback CDP; system proxy; service_workers allow; no existing browser profile or credentials.",
+  "captures": [
+    {
+      "name": "overview",
+      "evidence_id": "ev_46ff6f11e53bc18a83a71e5ea483a4b7189337c169a75293428be549b4fcafe1",
+      "request": "work/rea-features-20261018/overview-request.json",
+      "evidence": "work/rea-features-20261018/overview-evidence.json",
+      "completeness": {
+        "status": "incomplete",
+        "equality_eligible": false,
+        "missing_sections": [
+          "events"
+        ],
+        "truncated_sections": []
+      },
+      "browser": {
+        "mode": "connect",
+        "process_ownership": "external",
+        "cleanup": "disconnected-external",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "open-chart",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "chart-ready",
+          "status": "completed",
+          "error": null
+        }
+      ],
+      "observations": [
+        {
+          "step": "scenario_start",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 1116,
+          "help_article_observed": false
+        },
+        {
+          "step": "open-chart",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 10,
+          "help_article_observed": false
+        },
+        {
+          "step": "chart-ready",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 27,
+          "help_article_observed": false
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "settings",
+      "evidence_id": "ev_286c47911af409990453b65fd8095647a39c4fc9a36ab2a9006a084ede9251b8",
+      "request": "work/rea-features-20261018/settings-request.json",
+      "evidence": "work/rea-features-20261018/settings-evidence.json",
+      "completeness": {
+        "status": "incomplete",
+        "equality_eligible": false,
+        "missing_sections": [
+          "accessibility",
+          "action",
+          "events",
+          "screenshot",
+          "url"
+        ],
+        "truncated_sections": []
+      },
+      "browser": {
+        "mode": "connect",
+        "process_ownership": "external",
+        "cleanup": "disconnected-external",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "open-chart",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "chart-ready",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "settings",
+          "status": "failed",
+          "error": "Analysis operation timed out after 20000ms: capture_browser_scenario"
+        },
+        {
+          "id": "settings-ready",
+          "status": "cancelled",
+          "error": "not executed after an earlier action failure"
+        }
+      ],
+      "observations": [
+        {
+          "step": "scenario_start",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 1116,
+          "help_article_observed": false
+        },
+        {
+          "step": "open-chart",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 10,
+          "help_article_observed": false
+        },
+        {
+          "step": "chart-ready",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 27,
+          "help_article_observed": false
+        },
+        {
+          "step": "settings",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 35,
+          "help_article_observed": false
+        },
+        {
+          "step": "settings-ready",
+          "accessibility_state": "missing",
+          "help_article_observed": false
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "brush-help",
+      "evidence_id": "ev_c94bacf6bcfe980b3d32fe3fd2ff2f3e0ed9af0f5bfc38522dd21bd8984cac1f",
+      "request": "work/rea-features-20261018/brush-help-request.json",
+      "evidence": "work/rea-features-20261018/brush-help-evidence.json",
+      "completeness": {
+        "status": "incomplete",
+        "equality_eligible": false,
+        "missing_sections": [
+          "events"
+        ],
+        "truncated_sections": []
+      },
+      "browser": {
+        "mode": "connect",
+        "process_ownership": "external",
+        "cleanup": "disconnected-external",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "open-chart",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "chart-ready",
+          "status": "completed",
+          "error": null
+        }
+      ],
+      "observations": [
+        {
+          "step": "scenario_start",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 1116,
+          "help_article_observed": false
+        },
+        {
+          "step": "open-chart",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 10,
+          "help_article_observed": false
+        },
+        {
+          "step": "chart-ready",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 11223,
+          "help_article_observed": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "highlighter-help",
+      "evidence_id": "ev_26e64fa3cda30242d37731950ff1a0a30840ca8a4b58685f6a85b1a0823b9279",
+      "request": "work/rea-features-20261018/highlighter-help-request.json",
+      "evidence": "work/rea-features-20261018/highlighter-help-evidence.json",
+      "completeness": {
+        "status": "incomplete",
+        "equality_eligible": false,
+        "missing_sections": [
+          "events"
+        ],
+        "truncated_sections": []
+      },
+      "browser": {
+        "mode": "connect",
+        "process_ownership": "external",
+        "cleanup": "disconnected-external",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "open-chart",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "chart-ready",
+          "status": "completed",
+          "error": null
+        }
+      ],
+      "observations": [
+        {
+          "step": "scenario_start",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 1116,
+          "help_article_observed": false
+        },
+        {
+          "step": "open-chart",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 10,
+          "help_article_observed": false
+        },
+        {
+          "step": "chart-ready",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 11168,
+          "help_article_observed": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "rectangle-help",
+      "evidence_id": "ev_92e2445df9125e40b89bb2c39526ee6834a9aa817f7f5091b4b4162aacd2e3f7",
+      "request": "work/rea-features-20261018/rectangle-help-request.json",
+      "evidence": "work/rea-features-20261018/rectangle-help-evidence.json",
+      "completeness": {
+        "status": "incomplete",
+        "equality_eligible": false,
+        "missing_sections": [
+          "events"
+        ],
+        "truncated_sections": []
+      },
+      "browser": {
+        "mode": "connect",
+        "process_ownership": "external",
+        "cleanup": "disconnected-external",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "open-chart",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "chart-ready",
+          "status": "completed",
+          "error": null
+        }
+      ],
+      "observations": [
+        {
+          "step": "scenario_start",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 1116,
+          "help_article_observed": false
+        },
+        {
+          "step": "open-chart",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 10,
+          "help_article_observed": false
+        },
+        {
+          "step": "chart-ready",
+          "accessibility_state": "captured",
+          "accessibility_bytes": 13009,
+          "help_article_observed": true
+        }
+      ],
+      "error": null
+    }
+  ],
+  "conclusion": "The original chart remained on its loading indicator or partial chart region. Official brush, highlighter and rectangle help article content and screenshots were captured. Event sections remain incomplete. No original drawing-placement, countdown-settings or numerical equivalence was established.",
+  "official_references": [
+    "https://www.tradingview.com/support/solutions/43000476233-the-countdown-is-not-displayed-on-the-chart/",
+    "https://www.tradingview.com/blog/en/countdown-on-any-time-interval-16488/",
+    "https://www.tradingview.com/pine-script-docs/faq/times-dates-and-sessions/",
+    "https://www.tradingview.com/support/solutions/43000516987-brush-drawing-tool/",
+    "https://www.tradingview.com/support/solutions/43000791735-highlighter-drawing-tool/",
+    "https://www.tradingview.com/support/solutions/43000516984-rectangle-drawing-tool/"
+  ],
+  "local_validation": {
+    "unit": "npm test: 199 passed",
+    "browser_scripts": [
+      "work/features-ui-check.mjs",
+      "work/freehand-ui-check.mjs"
+    ],
+    "results": [
+      "work/features-ui-check/results.json",
+      "work/freehand-ui-check/results.json"
+    ],
+    "fixture": "Real cached OHLCV; deterministic clock for countdown and explicit open-bar flags; external market streams are stubbed."
+  },
+  "remaining_coverage": "docs/feature-audit-2026-10-18.md"
+}

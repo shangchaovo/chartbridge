@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-17",
+  "tool": "rea-agents 6.5.0",
+  "evidence_id": "ev_307dca22ad6ab37e0c05d487516e635f4a3d6bb636699e1180a91d40ad573495",
+  "target": "https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT",
+  "request": "work/rea-position-feel-20261017/gate-request.json",
+  "evidence": "work/rea-position-feel-20261017/gate-evidence.json",
+  "browser": {
+    "mode": "launch",
+    "process_ownership": "provider-owned",
+    "cleanup": "terminated-owned-process",
+    "product": "Chromium",
+    "version": "151.0.7922.34"
+  },
+  "completeness": {
+    "status": "complete",
+    "equality_eligible": true,
+    "missing_sections": [],
+    "truncated_sections": []
+  },
+  "steps": [
+    {
+      "id": "scenario_start",
+      "status": "completed"
+    },
+    {
+      "id": "chart-ready",
+      "status": "completed"
+    },
+    {
+      "id": "open-forecast",
+      "status": "completed"
+    },
+    {
+      "id": "forecast-menu",
+      "status": "completed"
+    },
+    {
+      "id": "choose-long",
+      "status": "completed"
+    },
+    {
+      "id": "long-selected",
+      "status": "completed"
+    }
+  ],
+  "login_gate_observed": true,
+  "observed": "Selecting the Long position tool icon in the public anonymous page opens the sign-up requirement. Placement and drag behavior were not observed live.",
+  "official_references": [
+    {
+      "url": "https://www.tradingview.com/support/solutions/43000517002-long-position-drawing-tool/",
+      "use": "Public visual examples, inputs, style and selected-only statistics."
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=OGF0K1UIUcs&t=73s",
+      "use": "Official tutorial transcript at 01:13-01:45 describes single-click placement, target/stop/duration adjustment and double-click settings."
+    }
+  ],
+  "local_verification": "work/position-feel-ui-check/results.json",
+  "limitations": [
+    "No authenticated browser session used.",
+    "No original-tool numerical or pixel equivalence claim.",
+    "The previous menu-row center click hit its embedded Help button; the previous capture is not evidence of actual tool placement."
+  ]
+}

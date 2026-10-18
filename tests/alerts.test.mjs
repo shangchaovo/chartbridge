@@ -1,21 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateAlerts } from '../src/alerts.js';
+import { evaluateAlerts, normalizePriceAlert, alertStatus } from '../src/alerts.js';
 import { resolveFeishuWebhook, sendFeishuText } from '../server/feishu.mjs';
 import { EventEmitter } from 'node:events';
 import { sendViaLarkCli, runLark } from '../server/lark-notify.mjs';
 import { alertMessage, createPriceAlerts, mergeFiredAlerts } from '../server/price-alerts.mjs';
 import { QUOTE_POLL_MS } from '../server/market-hub.mjs';
 
-test('a quote triggers only the matching unfired rule', () => {
+test('price reaches the level from either side, and staying on it does not fire again', () => {
   const alerts = [
     { id: 'high', symbol: 'BTCUSDT', direction: 'above', price: 100, firedAt: null },
     { id: 'low', symbol: 'BTCUSDT', direction: 'below', price: 90, firedAt: null },
-    { id: 'done', symbol: 'BTCUSDT', direction: 'above', price: 1, firedAt: 1 },
-    { id: 'other', symbol: 'ETHUSDT', direction: 'above', price: 1, firedAt: null },
+    { id: 'done', symbol: 'BTCUSDT', direction: 'crossingUp', price: 1, firedAt: 1 },
+    { id: 'other', symbol: 'ETHUSDT', direction: 'crossingDown', price: 1, firedAt: null },
   ];
-  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 101 }).map(alert => alert.id), ['high']);
-  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'ETHUSDT', price: 2 }).map(alert => alert.id), ['other']);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 100 }, 99).map(alert => alert.id), ['high']);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 101 }, 99).map(alert => alert.id), ['high']);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 89 }, 101).map(alert => alert.id), ['high', 'low']);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 101 }, 102).map(alert => alert.id), []);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 90 }, 91).map(alert => alert.id), ['low']);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 91 }, 89).map(alert => alert.id), ['low']);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 89 }, 89.5).map(alert => alert.id), []);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 100 }, 100).map(alert => alert.id), []);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 101 }, 100).map(alert => alert.id), []);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'ETHUSDT', price: 2 }, 0.5).map(alert => alert.id), ['other']);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'ETHUSDT', price: 0.5 }, 2).map(alert => alert.id), ['other']);
+  assert.deepEqual(evaluateAlerts(alerts, { symbol: 'BTCUSDT', price: 101 }).map(alert => alert.id), []);
+  for (const direction of ['above', 'below', 'crossing', 'crossingUp', 'crossingDown', null]) {
+    assert.equal(normalizePriceAlert({ id: 'a', direction, price: 1 }).direction, 'reach');
+  }
+  const paused = { id: 'paused', symbol: 'BTCUSDT', direction: 'above', price: 100, firedAt: null, paused: true };
+  assert.deepEqual(evaluateAlerts([paused], { symbol: 'BTCUSDT', price: 101 }, 99), []);
+  assert.equal(alertStatus(paused), 'paused');
+  assert.equal(alertStatus({ firedAt: 1 }), 'fired');
+  assert.equal(alertStatus({}), 'active');
 });
 
 test('saving the workspace cannot clear a trigger the server already recorded', () => {
@@ -25,23 +43,88 @@ test('saving the workspace cannot clear a trigger the server already recorded', 
   assert.equal(mergeFiredAlerts(previous, next).alerts[0].notice, 'missing_webhook');
 });
 
-test('quote arrival commits one notice and does not wait for a minute timer', async () => {
+test('quote arrival commits one notice when price reaches the level from below or above', async () => {
   let stored = [{ id: 'a', symbol: 'BTCUSDT', direction: 'above', price: 10, firedAt: null }];
   const sent = [];
   const published = [];
   const service = createPriceAlerts({
     readState: async () => ({ alerts: stored }),
     updateAlerts: async fired => { stored = stored.map(alert => fired.find(item => item.id === alert.id) || alert); },
-    deliver: async (_alert, price) => { sent.push(price); return { commit: true, notice: 'feishu' }; },
+    deliver: async (_alert, price) => { sent.push(price); return { commit: true, notice: 'local' }; },
     publish: event => published.push(event),
     clock: () => 1000,
   });
-  await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 11 } }]);
+  await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 9 } }]);
+  await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 9 } }]);
+  assert.deepEqual(sent, []);
+  await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 10 } }]);
+  await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 10 } }]);
   await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 12 } }]);
-  assert.deepEqual(sent, [11]);
+  assert.deepEqual(sent, [10]);
   assert.equal(stored[0].firedAt, 1000);
   assert.equal(published[0].type, 'alert');
-  assert.match(alertMessage(stored[0], 11), /BTCUSDT/);
+  assert.match(alertMessage(stored[0], 10), /达到/);
+  assert.doesNotMatch(alertMessage(stored[0], 10), /上穿|下穿/);
+
+  stored = [{ id: 'b', symbol: 'BTCUSDT', direction: 'crossingDown', price: 10, firedAt: null }];
+  const down = [];
+  const downService = createPriceAlerts({
+    readState: async () => ({ alerts: stored }),
+    updateAlerts: async fired => { stored = stored.map(alert => fired.find(item => item.id === alert.id) || alert); },
+    deliver: async (_alert, price) => { down.push(price); return { commit: true, notice: 'local' }; },
+    clock: () => 2000,
+  });
+  await downService.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 12 } }]);
+  await downService.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 11 } }]);
+  assert.deepEqual(down, []);
+  await downService.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 10 } }]);
+  await downService.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 10 } }]);
+  assert.deepEqual(down, [10]);
+});
+
+test('an alert already sitting on its price does not fire until price leaves and returns', async () => {
+  let stored = [{ id: 'a', symbol: 'BTCUSDT', direction: 'reach', price: 100, firedAt: null }];
+  const sent = [];
+  const service = createPriceAlerts({
+    readState: async () => ({ alerts: stored }),
+    updateAlerts: async fired => { stored = stored.map(alert => fired.find(item => item.id === alert.id) || alert); },
+    deliver: async (_alert, price) => { sent.push(price); return { commit: true, notice: 'local' }; },
+    clock: () => 1000,
+  });
+  await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 100 } }]);
+  await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 100 } }]);
+  await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 101 } }]);
+  assert.deepEqual(sent, []);
+  assert.equal(stored[0].firedAt, null);
+  await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 100 } }]);
+  await service.scan([{ type: 'quote', symbol: 'BTCUSDT', quote: { price: 100 } }]);
+  assert.deepEqual(sent, [100]);
+  assert.equal(stored[0].firedAt, 1000);
+});
+
+test('a failed reach notice is retried without requiring another touch', async () => {
+  let stored = [{ id: 'a', symbol: 'INTC', direction: 'below', price: 85.38, firedAt: null }];
+  let now = 1_000;
+  let commits = false;
+  const sent = [];
+  const service = createPriceAlerts({
+    readState: async () => ({ alerts: stored }),
+    updateAlerts: async fired => { stored = stored.map(alert => fired.find(item => item.id === alert.id) || alert); },
+    deliver: async (_alert, price) => { sent.push(price); return commits ? { commit: true, notice: 'feishu' } : { commit: false }; },
+    clock: () => now,
+  });
+  await service.scan([{ type: 'quote', symbol: 'INTC', quote: { price: 89.85 } }]);
+  await service.scan([{ type: 'quote', symbol: 'INTC', quote: { price: 85.2 } }]);
+  assert.deepEqual(sent, [85.2]);
+  assert.equal(stored[0].firedAt, null);
+  await service.scan([{ type: 'quote', symbol: 'INTC', quote: { price: 85.1 } }]);
+  assert.deepEqual(sent, [85.2]);
+  now = 20_000;
+  commits = true;
+  await service.scan([{ type: 'quote', symbol: 'INTC', quote: { price: 85.1 } }]);
+  assert.deepEqual(sent, [85.2, 85.2]);
+  assert.equal(stored[0].firedAt, 20_000);
+  assert.equal(stored[0].triggerPrice, 85.2);
 });
 
 test('feishu webhook is refused unless it is a bot hook, and a missing hook is not reported as sent', async () => {

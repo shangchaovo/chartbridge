@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {matchShortcut, SHORTCUTS} from '../src/shortcuts.js';
+import {matchShortcut, SHORTCUTS, shortcutConflict, loadShortcutOverrides, formatChord} from '../src/shortcuts.js';
 import {DRAWING_TOOLS} from '../src/drawing-catalog.js';
 
-const press = (key, extra = {}) => matchShortcut({key, target:{closest:()=>null}, ...extra});
+const press = (key, extra = {}, overrides) => matchShortcut({key, target:{closest:()=>null}, ...extra}, overrides);
 
 test('drawing and chart shortcuts match TradingView keys', () => {
   assert.equal(press('t', {altKey:true}), 'trend');
@@ -14,7 +14,7 @@ test('drawing and chart shortcuts match TradingView keys', () => {
   assert.equal(press('a', {altKey:true}), 'alert');
   assert.equal(press('t', {shiftKey:true}), 'lock-cursor');
   assert.equal(press('t', {altKey:true, shiftKey:true}), null);
-  assert.equal(press('m', {altKey:true}), 'ruler');
+  assert.equal(press('m', {altKey:true}), null);
   assert.equal(press('M', {altKey:true, shiftKey:true}), null);
   assert.equal(press('y', {altKey:true}), 'ray');
   assert.equal(press('e', {altKey:true}), 'extended');
@@ -61,8 +61,8 @@ test('typing and save stay out of each others way', () => {
   assert.equal(SHORTCUTS.find(item => item.id === 'lock-cursor').display, 'Shift+T');
   assert.equal(SHORTCUTS.find(item => item.id === 'rect').display, 'Alt+Shift+R');
   assert.equal(DRAWING_TOOLS.find(tool => tool.name === 'rect').shortcut, 'Alt+Shift+R');
-  assert.equal(DRAWING_TOOLS.find(tool => tool.name === 'datePriceRange').shortcut, 'Alt+M');
-  assert.equal(SHORTCUTS.find(item => item.id === 'ruler').display, 'Alt+M');
+  assert.equal(DRAWING_TOOLS.find(tool => tool.name === 'datePriceRange').shortcut, 'Shift，再点两下');
+  assert.equal(SHORTCUTS.find(item => item.id === 'ruler'), undefined);
   const catalogShortcuts = {
     rayLine:'Alt+Y', straightLine:'Alt+E', horizontalRayLine:'Alt+Shift+H', horizontalSegment:'Alt+Shift+S',
     parallelStraightLine:'Alt+P', priceChannelLine:'Alt+W', fibExtension:'Alt+Shift+F', localCircle:'Alt+O',
@@ -72,4 +72,17 @@ test('typing and save stay out of each others way', () => {
   for (const [name, shortcut] of Object.entries(catalogShortcuts)) {
     assert.equal(DRAWING_TOOLS.find(tool => tool.name === name).shortcut, shortcut);
   }
+});
+
+test('users can rebind a shortcut without silently replacing another', () => {
+  const overrides = {ray:{key:'b', alt:true, shift:false, ctrl:false}};
+  assert.equal(press('y', {altKey:true}, overrides), null);
+  assert.equal(press('b', {altKey:true}, overrides), 'ray');
+  assert.equal(press('t', {altKey:true}, overrides), 'trend');
+  assert.equal(shortcutConflict('ray', {key:'t', alt:true, shift:false, ctrl:false}, overrides).label, '趋势线');
+  assert.equal(shortcutConflict('ray', {key:'b', alt:true, shift:false, ctrl:false}, overrides), null);
+  assert.equal(formatChord(overrides.ray), 'Alt+B');
+  const storage = {getItem:() => JSON.stringify({ray:{key:'B', alt:true}, ruler:{key:'m', alt:true}, nope:{key:'q'}})};
+  assert.deepEqual(loadShortcutOverrides(storage).ray, {key:'b', alt:true, shift:false, ctrl:false});
+  assert.equal(loadShortcutOverrides(storage).ruler, undefined);
 });

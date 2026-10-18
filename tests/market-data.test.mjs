@@ -1,6 +1,7 @@
 import test, { afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchCandles, fetchYahoo, searchSymbols, SYMBOL_CATALOG, MarketDataError } from '../server/market-data.mjs';
+import { fetchCandles, fetchYahoo, searchSymbols, SYMBOL_CATALOG, MarketDataError, MAX_CANDLE_LIMIT } from '../server/market-data.mjs';
+import { collectPagedCandles } from '../server/candle-pages.mjs';
 
 afterEach(() => mock.restoreAll());
 const jsonResponse = data => new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -10,6 +11,7 @@ test('Yahoo omits null OHLC, deduplicates timestamps, sorts bars and preserves r
     assert.match(url, /chart\/600519\.SS/);
     return jsonResponse({ chart: { error: null, result: [{
       meta: { symbol: '600519.SS', currency: 'CNY', exchangeName: 'SHH', regularMarketPrice: 12,
+        currentTradingPeriod:{regular:{start:1_792_000_000,end:1_792_020_000}},
         regularMarketTime: 1_792_000_123, regularMarketChangePercent: 2, chartPreviousClose: 8 },
       timestamp: [1_792_000_120, 1_792_000_000, 1_792_000_060, 1_792_000_120],
       indicators: { quote: [{ open: [10, 9, null, 11], high: [12, 11, 12, 13], low: [9, 8, 9, 10],
@@ -22,6 +24,7 @@ test('Yahoo omits null OHLC, deduplicates timestamps, sorts bars and preserves r
     { timestamp: 1_792_000_120_000, open: 11, high: 13, low: 10, close: 12, volume: 4 },
   ]);
   assert.equal(result.meta.delayMinutes, 30);
+  assert.deepEqual(result.meta.currentSession,{start:1_792_000_000_000,end:1_792_020_000_000});
   assert.equal(result.quote.timestamp, 1_792_000_123_000);
   assert.equal(result.quote.changePercent, 2);
   assert.equal(result.quote.previousClose, null, 'range-start previous close must not masquerade as yesterday close');
@@ -75,7 +78,8 @@ test('Unsupported periods and invalid inputs are rejected before network access'
   const stub = mock.method(globalThis, 'fetch', () => { throw new Error('must not fetch'); });
   await assert.rejects(fetchCandles({ symbol: 'AAPL', interval: '2h' }), { code: 'INVALID_INTERVAL' });
   await assert.rejects(fetchCandles({ symbol: '../secret' }), { code: 'INVALID_SYMBOL' });
-  await assert.rejects(fetchCandles({ symbol: 'AAPL', limit: 1001 }), { code: 'INVALID_LIMIT' });
+  await assert.rejects(fetchCandles({ symbol: 'AAPL', limit: 5001 }), { code: 'INVALID_LIMIT' });
+  await assert.rejects(fetchCandles({ symbol: 'AAPL', before: 0 }), { code: 'INVALID_BEFORE' });
   assert.equal(stub.mock.callCount(), 0);
 });
 
@@ -154,6 +158,18 @@ test('Chinese search explains catalog coverage and avoids an unsupported remote 
   assert.equal(stub.mock.callCount(), 0);
 });
 
+test('explicit Binance stock perpetual codes retain their venue instead of becoming spot pairs', async () => {
+  const stub = mock.method(globalThis, 'fetch', () => { throw new Error('must not fetch'); });
+  for (const query of ['BINANCE:TSLAUSDT', 'binance:aaplusdt']) {
+    const result = await searchSymbols(query);
+    assert.equal(result.results.length, 1);
+    assert.equal(result.results[0].symbol, query.toUpperCase());
+    assert.equal(result.results[0].market, 'us-binance');
+    assert.equal(result.results[0].provider, 'binance-perp');
+  }
+  assert.equal(stub.mock.callCount(), 0);
+});
+
 test('Expanded directory exposes Chinese names, ETF types and every market without network access', async () => {
   const stub = mock.method(globalThis, 'fetch', () => { throw new Error('must not fetch'); });
   for (const [query, symbol] of [['长江电力','600900.SS'],['比亚迪','002594.SZ'],['半导体','SMH'],['天然气','NG=F'],['日经','^N225'],['派拓','PANW']]) {
@@ -189,4 +205,93 @@ test('Directory-external codes disclose unverified availability and keep exchang
   assert.deepEqual((await searchSymbols('../../secret')).results, []);
   assert.deepEqual((await searchSymbols('SINA:RB0')).results, []);
   assert.deepEqual((await searchSymbols('TQ:KQ.m@SHFE.rb')).results, []);
+});
+
+test('paged history walks every full page and stops on a short page', async () => {
+  const calls = [];
+  const result = await collectPagedCandles({
+    limit: 5,
+    pageSize: 2,
+    fetchPage: async ({ limit, endTime }) => {
+      calls.push({ limit, endTime });
+      if (calls.length === 1) return [{ timestamp: 30, close: 3 }, { timestamp: 40, close: 4 }];
+      if (calls.length === 2) return [{ timestamp: 10, close: 1 }, { timestamp: 20, close: 2 }];
+      return [{ timestamp: 5, close: 1 }];
+    },
+  });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map(call => call.limit), [2, 2, 2]);
+  assert.deepEqual(calls.map(call => call.endTime), [null, 29, 9]);
+  assert.deepEqual(result.rows.map(row => row.timestamp), [5, 10, 20, 30, 40]);
+  assert.equal(result.exhausted, true);
+  assert.equal(MAX_CANDLE_LIMIT, 5000);
+});
+
+test('paged history does not stop at the old fixed page ceilings', async () => {
+  let page = 0;
+  const result = await collectPagedCandles({
+    limit: 5000,
+    pageSize: 2,
+    fetchPage: async () => {
+      page += 1;
+      if (page <= 9) {
+        const base = 10_000 - page * 2;
+        return [{ timestamp: base, close: 1, open: 1, high: 1, low: 1 }, { timestamp: base + 1, close: 1, open: 1, high: 1, low: 1 }];
+      }
+      return [{ timestamp: 1, close: 1, open: 1, high: 1, low: 1 }];
+    },
+  });
+  assert.ok(result.pages > 8);
+  assert.equal(result.exhausted, true);
+  assert.equal(result.rows[0].timestamp, 1);
+  assert.equal(result.rows.length, 19);
+});
+
+test('Binance walks a second kline page when the first public page is full', async () => {
+  const hour = 3_600_000;
+  const start = 1_700_000_000_000;
+  const page = (from, count) => Array.from({ length: count }, (_, index) => {
+    const timestamp = from + index * hour;
+    return [timestamp, '10', '12', '9', '11', '1', timestamp + hour - 1];
+  });
+  const urls = [];
+  mock.method(globalThis, 'fetch', async url => {
+    urls.push(url);
+    if (url.includes('/ticker/')) return jsonResponse({ lastPrice: '11', priceChange: '1', priceChangePercent: '1', prevClosePrice: '10', closeTime: start, volume: '1' });
+    const endTime = new URL(url).searchParams.get('endTime');
+    if (!endTime) return jsonResponse(page(start, 1000));
+    assert.equal(Number(endTime), start - 1);
+    return jsonResponse(page(start - 500 * hour, 500));
+  });
+  const result = await fetchCandles({ symbol: 'BTCUSDT', interval: '1h', limit: 1500 });
+  assert.equal(urls.filter(url => url.includes('/klines?')).length, 2);
+  assert.equal(result.candles.length, 1500);
+  assert.equal(result.candles[0].timestamp, start - 500 * hour);
+  assert.equal(result.candles.at(-1).timestamp, start + 999 * hour);
+});
+
+test('Yahoo walks earlier windows with period bounds instead of a fixed range', async () => {
+  const urls = [];
+  mock.method(globalThis, 'fetch', async url => {
+    urls.push(url);
+    return jsonResponse({ chart: { result: [{
+      meta: { symbol: 'AAPL', currency: 'USD', exchangeName: 'NMS', regularMarketPrice: 12, regularMarketTime: 1_792_086_400 },
+      timestamp: [1_792_000_000, 1_792_086_400],
+      indicators: { quote: [{ open: [10, 11], high: [12, 13], low: [9, 10], close: [11, 12], volume: [1, 1] }] },
+    }] } });
+  });
+  await fetchCandles({ symbol: 'AAPL', interval: '1d', limit: 800 });
+  const first = new URL(urls[0]);
+  const span = Number(first.searchParams.get('period2')) - Number(first.searchParams.get('period1'));
+  assert.ok(span > 1000 * 86400 && span < 6 * 365 * 86400);
+  const marked = urls.length;
+  await fetchCandles({ symbol: 'AAPL', interval: '1d', limit: 1500 });
+  const wider = new URL(urls[marked]);
+  const widerSpan = Number(wider.searchParams.get('period2')) - Number(wider.searchParams.get('period1'));
+  assert.ok(widerSpan > span);
+  const older = await fetchCandles({ symbol: 'AAPL', interval: '1d', limit: 1000, before: 1_792_086_400_000 });
+  const bounded = urls.map(url => new URL(url)).find(url => url.searchParams.get('period2') === '1792086400');
+  assert.ok(bounded);
+  assert.deepEqual(older.candles.map(bar => bar.timestamp), [1_792_000_000_000]);
+  assert.equal(older.meta.exhausted, true);
 });

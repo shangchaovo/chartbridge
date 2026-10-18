@@ -1,4 +1,7 @@
 const paths = {
+  brush: '<path d="m14 4 6 6-10 10H4v-6zM11 7l6 6M4 20l3-3"/>',
+  highlighter: '<path d="m14 3 7 7-9 9-7-7zM6 13l-3 5 3 3 5-3M3 22h13"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18M7 14h3M14 14h3M7 17h3"/>',
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
@@ -65,5 +68,19 @@ const paths = {
   copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M4 16V4h12"/>',
   edit: '<path d="M4 20h4l11-11-4-4L4 16zM12 7l4 4"/>',
   step: '<path d="m6 5 8 7-8 7zM16 5v14"/>',
+  stepBack: '<path d="m18 5-8 7 8 7zM8 5v14"/>',
+  longPosition: '<path d="M4 12h16M5 3h14v9H5zM5 12h14v9H5zM8 8l3-3 3 3M11 5v5"/>',
+  shortPosition: '<path d="M4 12h16M5 3h14v9H5zM5 12h14v9H5zM8 16l3 3 3-3M11 14v5"/>',
+  infoLine: '<path d="m3 19 18-14"/><circle cx="7" cy="7" r="4"/><path d="M7 6v3M7 4.5v.1"/>',
+  fibTime: '<path d="M3 3v18M6 3v18M10 3v18M15 3v18M22 3v18M3 17h19"/>',
+  ellipse: '<ellipse cx="12" cy="12" rx="10" ry="6"/>',
+  vwap: '<path d="M3 18c4-12 7 4 11-6s5-3 7-8M3 22V3"/>',
+  volumeProfile: '<path d="M20 3v18M4 5h16M9 8h11M2 11h18M6 14h14M10 17h10M14 20h6"/>',
+  regression: '<path d="m3 20 18-9M3 14l18-9M3 17l18-9"/><path d="m5 15 3 1 3-4 4 1 4-4"/>',
+  grip: '<circle cx="9" cy="7" r="1.15"/><circle cx="15" cy="7" r="1.15"/><circle cx="9" cy="12" r="1.15"/><circle cx="15" cy="12" r="1.15"/><circle cx="9" cy="17" r="1.15"/><circle cx="15" cy="17" r="1.15"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M5.8 5.8l1.6 1.6M16.6 16.6l1.6 1.6M18.2 5.8l-1.6 1.6M7.4 16.6l-1.6 1.6"/>',
+  more: '<circle cx="12" cy="6" r="1.15"/><circle cx="12" cy="12" r="1.15"/><circle cx="12" cy="18" r="1.15"/>',
+  lineSolid: '<path d="M4 12h16"/>',
+  lineDashed: '<path d="M4 12h2.5M9 12h2.5M14 12h2.5M19 12h1.5"/>',
 };
 export function icon(name) { return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.plus}</svg>`; }

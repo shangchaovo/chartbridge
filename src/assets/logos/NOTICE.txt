@@ -4,3 +4,16 @@ Copyright (c) 2017 Atomic Labs, Inc.
 
 Company, index, and currency marks are public icons of those
 organizations, stored in this folder so the terminal can show them offline.
+
+The tv-*.svg files were obtained from the public symbol-logo CDN used by
+TradingView. sources.json records each source URL, symbol mapping, retrieval
+time and SHA-256. These are third-party brand marks, not original artwork
+licensed under the repository license. Rights remain with their owners.
+Use is for instrument identification. No affiliation or endorsement implied.
+
+The bn-* raster files were obtained from Binance's public asset directory and
+its bin.bnbstatic.com CDN. sources.json records the exact asset codes, official
+asset names and URLs, and SHA-256 checksums.
+
+Currency-pair, commodity and generated fallback marks are original inline SVG
+in src/symbol-mark.js. They do not claim to be official brand logos.

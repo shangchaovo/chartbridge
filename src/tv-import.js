@@ -9,7 +9,7 @@ const CHARTS = {
   line: 'area', area: 'area', bars: 'ohlc', ohlc: 'ohlc',
 };
 
-export function normalizeImportedSymbol(raw) {
+export function normalizeImportedSymbol(raw, catalog = []) {
   const text = String(raw || '').trim();
   if (!text || text.startsWith('#') || /\s/.test(text)) return '';
   const upper = text.toUpperCase();
@@ -17,6 +17,18 @@ export function normalizeImportedSymbol(raw) {
   const venue = parts.length > 1 ? parts[0] : '';
   const ticker = parts.length > 1 ? parts.slice(1).join(':') : upper;
   let symbol = ticker || venue;
+  if (venue === 'BINANCE' && /\.P$/.test(ticker)) {
+    const contract = ticker.slice(0, -2);
+    const code = `BINANCE:${contract}`;
+    return catalog.find(item => item.symbol === code)?.symbol || code;
+  }
+  if (venue === 'BINANCE') {
+    return catalog.find(item => item.symbol === ticker)?.symbol ||
+      catalog.find(item => item.symbol === `BINANCE-SPOT:${ticker}`)?.symbol ||
+      catalog.find(item => item.symbol === upper)?.symbol ||
+      (/^[A-Z0-9]+U$/.test(ticker) ? `BINANCE-SPOT:${ticker}` : ticker);
+  }
+  if (['COINBASE', 'BITSTAMP', 'PYTH', 'IG', 'BINANCE-SPOT'].includes(venue)) return upper;
   if (venue === 'HKEX' && /^\d{1,5}$/.test(symbol)) symbol = `${symbol.padStart(4, '0')}.HK`;
   else if (venue === 'SSE' && /^\d{6}$/.test(symbol)) symbol = `${symbol}.SS`;
   else if ((venue === 'SZSE' || venue === 'SZ') && /^\d{6}$/.test(symbol)) symbol = `${symbol}.SZ`;
@@ -31,7 +43,7 @@ function symbolList(value) {
   return [];
 }
 
-export function importTradingViewConfig(text, { watchlist = [], supportedIndicators = [] } = {}) {
+export function importTradingViewConfig(text, { watchlist = [], supportedIndicators = [], catalog = [] } = {}) {
   const source = String(text || '').trim();
   if (!source) throw new Error('文件是空的。');
   let data;
@@ -46,8 +58,8 @@ export function importTradingViewConfig(text, { watchlist = [], supportedIndicat
   if (!data || typeof data !== 'object') throw new Error('配置格式无法识别。');
   const known = new Set(['symbols', 'watchlist', 'symbol', 'interval', 'timeframe', 'chartType', 'style', 'indicators', 'indicatorParams', 'studies', 'name', 'title']);
   for (const key of Object.keys(data)) if (!known.has(key)) ignored.push(key);
-  const incoming = [...symbolList(data.symbols), ...symbolList(data.watchlist)].map(normalizeImportedSymbol).filter(Boolean);
-  const skippedSymbols = [...symbolList(data.symbols), ...symbolList(data.watchlist)].map(item => String(item || '').trim()).filter(item => item && !item.startsWith('#') && !normalizeImportedSymbol(item));
+  const incoming = [...symbolList(data.symbols), ...symbolList(data.watchlist)].map(value => normalizeImportedSymbol(value, catalog)).filter(Boolean);
+  const skippedSymbols = [...symbolList(data.symbols), ...symbolList(data.watchlist)].map(item => String(item || '').trim()).filter(item => item && !item.startsWith('#') && !normalizeImportedSymbol(item, catalog));
   if (skippedSymbols.length) ignored.push(`无法识别的代码 ${skippedSymbols.slice(0, 8).join('、')}`);
   const merged = [...watchlist];
   const added = [];
@@ -57,7 +69,7 @@ export function importTradingViewConfig(text, { watchlist = [], supportedIndicat
     merged.push(symbol);
     added.push(symbol);
   }
-  const symbol = normalizeImportedSymbol(data.symbol || '') || null;
+  const symbol = normalizeImportedSymbol(data.symbol || '', catalog) || null;
   const interval = INTERVALS[String(data.interval || data.timeframe || '').trim()] || null;
   if ((data.interval || data.timeframe) && !interval) ignored.push(`周期 ${data.interval || data.timeframe}`);
   const chartType = CHARTS[String(data.chartType || data.style || '').trim()] || null;

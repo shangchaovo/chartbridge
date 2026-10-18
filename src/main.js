@@ -9,6 +9,7 @@ import { LiveFeed } from './live-feed.js';
 import { collectPineRequests,canonicalSymbol } from './pine-data.js';
 import { mountAccountSettings } from './account-settings.js';
 import { mountAgentResearch } from './agent-research.js';
+import { mountPythSettings } from './pyth-settings.js';
 import { nextPriceRange, wheelScale } from './price-axis.js';
 import { activateSymbolMarks, symbolMark } from './symbol-mark.js';
 import { importTradingViewConfig } from './tv-import.js';
@@ -16,19 +17,34 @@ import { initPanelLayout } from './panel-layout.js';
 import { DRAWING_NAMES, DRAWING_TOOLS } from './drawing-catalog.js';
 import { DrawingHistory } from './drawing-history.js';
 import { registerChartOverlays } from './chart-overlays.js';
+import { registerPositionOverlays } from './position-overlays.js';
+import { positionCursor } from './position-geometry.js';
+import { isPosition, positionSettings } from './position-risk.js';
+import { mountPositionEditor } from './position-editor.js';
+import { registerStudyOverlays } from './study-overlays.js';
 import { renderDrawingToolbar, closeDrawingMenu, drawingChoice } from './drawing-toolbar.js';
-import { SHORTCUTS, matchShortcut } from './shortcuts.js';
+import { SHORTCUTS, MEASURE_GESTURE, matchShortcut, chordFromEvent, formatChord, shortcutConflict, loadShortcutOverrides, shortcutDisplay, toolShortcutLabel, eventMatches, SHORTCUT_STORAGE_KEY } from './shortcuts.js';
+import { INITIAL_BARS, HISTORY_PAGE, canLoadOlder, historyRequest, mergeOlderBars, historyHasMore, mergeRefresh } from './history-page.js';
 import { DEFAULT_CHART_PREFERENCES, loadChartPreferences, normalizeChartPreferences } from './chart-preferences.js';
+import { barCountdown, registerCountdownOverlay } from './bar-countdown.js';
+import { isFreehand, simplifyStroke, registerFreehandOverlays } from './freehand.js';
+import { mountDrawingEditor } from './drawing-editor.js';
+import { CHART_TIMEZONES, chartTimezone, timezoneLabel, chartDateTime, findChartBar } from './chart-time.js';
+import { alertStatus, isReachDirection, normalizePriceAlert } from './alerts.js';
+import { clampBox, readLegendPosition, writeLegendPosition, DRAWING_PANEL_STORAGE_KEY } from './chart-legend.js';
+import { replayDelay, replayStartCount, stepReplayCount } from './replay.js';
+import { MARKET_NAMES, MARKET_FILTERS, marketCategory, matchesMarket, usStockLabel, usStockPair, mergeWatchlist } from './market-categories.js';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 const fmt = (value, precision) => Number.isFinite(value) ? value.toLocaleString('en-US', { minimumFractionDigits: precision ?? (Math.abs(value) < 1 ? 4 : 2), maximumFractionDigits: precision ?? (Math.abs(value) < 1 ? 6 : 2) }) : '—';
 const pct = value => Number.isFinite(value) ? `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%` : '—';
+const quotePct = value => Number.isFinite(value) ? pct(value / 100) : '—';
 const sign = value => value > 0 ? 'positive' : value < 0 ? 'negative' : '';
 const date = value => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—';
 const shortDate = value => new Date(value).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit' });
-const marketNames = {crypto:'加密现货',us:'美股',hk:'港股',cn:'A股','cn-futures':'国内期货',forex:'外汇',futures:'国际期货',indices:'指数',global:'其他市场',local:'本地数据'};
+const marketNames = MARKET_NAMES;
 const examples = {
   ema: '//@version=6\nindicator("双均线 EMA", overlay=true)\nfast = input.int(12, "快线")\nslow = input.int(26, "慢线")\nplot(ta.ema(close, fast), "EMA 快线", color=color.aqua, linewidth=2)\nplot(ta.ema(close, slow), "EMA 慢线", color=color.orange, linewidth=2)\nplotshape(ta.crossover(ta.ema(close, fast), ta.ema(close, slow)), title="上穿", style=shape.triangleup, location=location.belowbar, color=color.lime, text="上穿")',
   rsi: '//@version=6\nindicator("RSI 动量", overlay=false)\nlength = input.int(14, "周期")\nplot(ta.rsi(close, length), "RSI", color=color.aqua, linewidth=2)\nhline(70, "超买", color=color.red)\nhline(30, "超卖", color=color.green)',
@@ -44,8 +60,10 @@ const defaults = {
 };
 let state = structuredClone(defaults);
 let catalog = [], chart, secondaryChart, payload, allCandles = [], activeTab = 'backtest', marketFilter = 'all';
+let secondaryPayload=null,secondaryLoadingId=0;
+let freehandDrag=null,freehandFrame=null;
 let refreshPanelLayout = () => {};
-let loadingId = 0, backtestResult = null, pineResult = null, replay = false, replayCount = 0, replayTimer = null;
+let loadingId = 0, backtestResult = null, pineResult = null, replay = false, replaySelecting = false, replayCount = 0, replayTimer = null, replaySpeed = 1;
 let pineWorker = null, saveTimer = null, toastTimer, autoBusy = false, currentTool = '', magnet = 'normal', drawingsLocked = false, selectedDrawing = '';
 let pendingDrawing='',keepDrawing=localStorage.getItem('shanhai-keep-drawing')==='1',drawingsHidden=localStorage.getItem('shanhai-hide-drawings')==='1';
 const drawingHistory=new DrawingHistory(),drawingVisibility=new Map(),toolChoices={};
@@ -56,7 +74,11 @@ let actorId=localStorage.getItem('shanhai-actor-id');if(!actorId){actorId=newId(
 const actor={id:actorId,name:localStorage.getItem('shanhai-actor-name')||'图表研究者'};
 const liveFeed=new LiveFeed({event:applyLiveEvent,status:updateLiveStatus});
 const quotes = new Map(), drawingIds = new Set(), subPanes = new Map();
-let chartClipboard=null,chartPointer={price:null,timestamp:null};
+let chartClipboard=null,chartPointer={price:null,timestamp:null},plusCrosshairX=null,plusCrosshairPinned=false;
+let shortcutOverrides=loadShortcutOverrides(typeof localStorage==='undefined'?{getItem:()=>null}:localStorage);
+let rebindingId=null;
+const SHIFT_MEASURE_ID='shift-measure';
+let shiftMeasureDrag=null,measureArmed=false,shiftHoldForMeasure=false,measurePhase='off',measureAnchor=null,measureClick=null,liveCrosshair=null;
 const indicatorDescriptions = {MA:'简单移动均线',EMA:'指数移动均线',BOLL:'布林带',SAR:'抛物线转向',BBI:'多空指标',VOL:'成交量',MACD:'平滑异同均线',RSI:'相对强弱',KDJ:'随机指标',ATR:'平均真实波幅',CCI:'顺势指标',DMI:'趋向指标',OBV:'能量潮',WR:'威廉指标',ROC:'变动率',MTM:'动量',TRIX:'三重指数平滑',VR:'成交量比率',BRAR:'情绪指标',EMV:'简易波动',DMA:'平行线差',PSY:'心理线'};
 const onPricePane = new Set(['MA','EMA','BOLL','SAR','BBI']);
 const supportedIndicators = getSupportedIndicators();
@@ -73,7 +95,7 @@ async function api(path, options) {
 }
 function enabledSymbol(symbol){return connection?.features?.domesticFutures||!/^(SINA:|TQ:)/i.test(symbol);}
 function currentInstrument() { return catalog.find(item => item.symbol === state.symbol) || {symbol:state.symbol,name:state.symbol,market:state.imports[state.symbol]?'local':'us',exchange:payload?.meta.exchange || ''}; }
-function visibleCandles() { return replay ? allCandles.slice(0,replayCount) : allCandles; }
+function visibleCandles() { return replay && !replaySelecting ? allCandles.slice(0,replayCount) : allCandles; }
 function closedCandles() { const values = visibleCandles(); return state.imports[state.symbol]||replay ? values : values.filter((bar,index)=>bar.closed===true||(bar.closed===undefined&&index<values.length-1)); }
 function chartColors() {
   const css = getComputedStyle(document.body); return Object.fromEntries(['bg','line','text','muted','faint','accent','up','down','blue'].map(key => [key,css.getPropertyValue(`--${key}`).trim()]));
@@ -82,17 +104,17 @@ function styleChart(target) {
   const c = chartColors();
   target.setStyles(state.theme === 'light' ? 'light' : 'dark');
   target.setStyles({
-    grid:{show:chartPreferences.grid,horizontal:{show:chartPreferences.grid,color:c.line,style:'dashed',dashedValue:[2,5]},vertical:{show:chartPreferences.grid,color:c.line,style:'dashed',dashedValue:[2,5]}},
-    candle:{type:state.chartType,bar:{upColor:c.up,downColor:c.down,noChangeColor:c.muted,upBorderColor:c.up,downBorderColor:c.down,noChangeBorderColor:c.muted,upWickColor:c.up,downWickColor:c.down,noChangeWickColor:c.muted},area:{lineSize:2,lineColor:c.accent,backgroundColor:[{offset:0,color:state.theme==='light'?'rgba(138,98,48,.10)':'rgba(212,169,78,.10)'},{offset:1,color:'rgba(212,169,78,0)'}]},tooltip:{showRule:'none'},priceMark:{last:{upColor:c.up,downColor:c.down,noChangeColor:c.muted,text:{color:state.theme==='light'?'#ffffff':'#0b0f17'}}}},
-    indicator:{tooltip:{showRule:'follow_cross',text:{color:c.muted,size:10}},lines:[{color:c.blue,size:1.4},{color:'#d5aa62',size:1.2},{color:'#a491cf',size:1.2}]},
-    xAxis:{axisLine:{color:c.line},tickLine:{show:false},tickText:{color:c.muted,size:9}},
-    yAxis:{type:chartPreferences.scale,reverse:chartPreferences.reverse,axisLine:{show:false},tickLine:{show:false},tickText:{color:c.muted,size:9}},
-    separator:{color:c.line,activeBackgroundColor:c.line},
-    crosshair:{show:chartPreferences.crosshair,horizontal:{line:{color:c.faint},text:{color:c.text,backgroundColor:c.raised || c.line}},vertical:{line:{color:c.faint},text:{color:c.text,backgroundColor:c.line}}},
-    overlay:{line:{color:c.accent,size:1},point:{color:c.bg,borderColor:c.accent,borderSize:1},text:{color:c.accent,size:10},rect:{color:'rgba(212,169,78,.08)',borderColor:c.accent}},
+    grid:{show:chartPreferences.grid,horizontal:{show:chartPreferences.grid,color:c.line,style:'solid'},vertical:{show:chartPreferences.grid,color:c.line,style:'solid'}},
+    candle:{type:state.chartType==='line'?'area':state.chartType,bar:{upColor:c.up,downColor:c.down,noChangeColor:c.muted,upBorderColor:c.up,downBorderColor:c.down,noChangeBorderColor:c.muted,upWickColor:c.up,downWickColor:c.down,noChangeWickColor:c.muted},area:{lineSize:2,lineColor:'#2962ff',backgroundColor:[{offset:0,color:state.chartType==='line'?'rgba(41,98,255,0)':state.theme==='light'?'rgba(41,98,255,.16)':'rgba(41,98,255,.28)'},{offset:1,color:'rgba(41,98,255,0)'}]},tooltip:{showRule:'none'},priceMark:{last:{upColor:c.up,downColor:c.down,noChangeColor:c.muted,text:{color:'#ffffff'}}}},
+    indicator:{tooltip:{showRule:'follow_cross',text:{color:c.muted,size:11}},lines:[{color:'#2962ff',size:1.2},{color:'#ff9800',size:1.2},{color:'#e040fb',size:1.2}]},
+    xAxis:{axisLine:{color:c.line},tickLine:{show:false},tickText:{color:c.muted,size:11}},
+    yAxis:{type:chartPreferences.scale,reverse:chartPreferences.reverse,axisLine:{show:false},tickLine:{show:false},tickText:{color:c.muted,size:11}},
+    separator:{color:c.line,activeBackgroundColor:'#2962ff'},
+    crosshair:{show:chartPreferences.crosshair,horizontal:{line:{show:true,style:'dashed',dashedValue:[4,3],size:1,color:state.theme==='light'?'#9598a1':'#758696'},text:{color:'#ffffff',backgroundColor:state.theme==='light'?'#131722':'#363a45'}},vertical:{line:{show:true,style:'dashed',dashedValue:[4,3],size:1,color:state.theme==='light'?'#9598a1':'#758696'},text:{color:'#ffffff',backgroundColor:state.theme==='light'?'#131722':'#363a45'}}},
+    overlay:{line:{color:'#2962ff',size:1},point:{color:c.bg,borderColor:'#2962ff',borderSize:1},text:{color:'#2962ff',size:11},rect:{color:'rgba(41,98,255,.12)',borderColor:'#2962ff'}},
   });
-  target.setLocale('zh-CN'); target.setTimezone('Asia/Shanghai'); target.setOffsetRightDistance(55);
-  target.setStyles({candle:{priceMark:{last:{show:chartPreferences.lastPrice}}}});
+  target.setLocale('zh-CN'); target.setTimezone(chartTimezone(chartPreferences.timezone,(target===secondaryChart?secondaryPayload:payload)?.meta.timezone));
+  target.setStyles({candle:{priceMark:{last:{show:chartPreferences.lastPrice||chartPreferences.lastPriceLine,text:{show:chartPreferences.lastPrice},line:{show:chartPreferences.lastPriceLine}}}}});
   $$('.chart-watermark').forEach(el=>el.classList.toggle('hidden',!chartPreferences.watermark));
   $$('[data-price-scale]').forEach(button=>button.classList.toggle('selected',button.dataset.priceScale===chartPreferences.scale));
 }
@@ -140,18 +162,92 @@ function markPriceAxes(target){
 }
 function setupChart() {
   registerLocalOverlays();
+  registerCountdownOverlay(registerOverlay);
+  registerFreehandOverlays(registerOverlay);
   chart = init('chart'); styleChart(chart); bindPriceAxisWheel(chart);
+  chart.setOffsetRightDistance(55);
   chart.subscribeAction('onCrosshairChange', data => {
+    if(data?.paneId==='candle_pane'&&Number.isFinite(data.x))plusCrosshairX=data.x;
     if (data?.kLineData) renderOhlc(data.kLineData);
     if (data?.paneId==='candle_pane' && Number.isFinite(data.y)) {
       const price=chart.getDrawPaneById?.('candle_pane')?.getAxisComponent?.()?.convertFromPixel?.(data.y);
       if (Number.isFinite(price)&&price>0) chartPointer.price=price;
       if (Number.isFinite(data.kLineData?.timestamp)) chartPointer.timestamp=data.kLineData.timestamp;
+      const index=data.dataIndex;
+      if (data.kLineData && Number.isInteger(index) && Number.isFinite(price) && price>0) {
+        liveCrosshair={value:price,timestamp:data.kLineData.timestamp,dataIndex:index};
+        const host=$('#chart');
+        if(host){host.dataset.crosshairIndex=String(index);host.dataset.crosshairPrice=String(price);}
+        if(measurePhase==='tracking'&&measureAnchor)showShiftMeasure(measureAnchor,liveCrosshair);
+      }
     }
   });
-  chart.setLoadDataCallback(({callback}) => callback([],false));
-  new ResizeObserver(() => {chart.resize();secondaryChart?.resize();}).observe($('#chart-area'));
+  chart.getDom()?.addEventListener('mouseleave',event=>{
+    if(!event.relatedTarget?.closest?.('#price-plus'))return;
+    const y=Number($('#price-plus')?.dataset.clientY);
+    if(!Number.isFinite(y))return;
+    pinPlusCrosshair(y);
+    requestAnimationFrame(()=>{if($('#price-plus-button')?.matches(':hover'))pinPlusCrosshair(Number($('#price-plus')?.dataset.clientY));});
+  });
+  bindHistory(chart, 'chart');
+  chart.subscribeAction('onCandleBarClick', data => {
+    if (!replay || !replaySelecting) return;
+    const start = replayStartCount(data?.dataIndex, allCandles.length);
+    if (start == null) return;
+    replaySelecting = false;
+    replayCount = start;
+    applyReplay();
+  });
+  new ResizeObserver(() => {chart.resize();secondaryChart?.resize();applyDrawingPanelPosition();}).observe($('#chart-area'));
   syncIndicators();
+}
+function renderCountdown(target,value,interval,main=false){
+  if(!target)return;
+  const host=target.getDom(),meta=main&&liveMeta?{...value?.meta,...liveMeta,cache:liveMeta.cache}:value?.meta;
+  const bar=target.getDataList().at(-1);
+  const result=barCountdown({bar: value?bar:null,interval,meta,enabled:chartPreferences.countdown&&chartPreferences.lastPrice,replay,paused:!state.autoRefresh,imported:Boolean(state.imports[state.symbol]),continuous:['binance','binance-perp','okx','kraken'].includes(meta?.provider)});
+  host.dataset.countdown=result.visible?result.text:'';host.dataset.countdownState=result.visible?'running':result.reason;
+  const id='bar-close-countdown';
+  if(!result.visible){if(target.getOverlayById(id))target.removeOverlay({id});return;}
+  const c=chartColors(),extendData={text:result.text,color:bar.close>bar.open?c.up:bar.close<bar.open?c.down:c.muted};
+  const config={id,points:[{timestamp:bar.timestamp,value:bar.close}],extendData};
+  if(target.getOverlayById(id))target.overrideOverlay(config);
+  else target.createOverlay({...config,name:'localBarCountdown',groupId:'chart-countdown',lock:true,zLevel:-1});
+}
+function renderChartTime(){
+  const zone=chartTimezone(chartPreferences.timezone,payload?.meta.timezone);
+  const label=$('#timezone-label');if(label){label.textContent=timezoneLabel(zone);label.title='切换图表时区';}
+  renderCountdown(chart,payload,state.interval,true);renderCountdown(secondaryChart,secondaryPayload,state.secondaryInterval);
+}
+function bindHistory(target, kind) {
+  target.setLoadDataCallback(({ type, data, callback }) => {
+    const intervalNow = () => kind === 'chart' ? state.interval : state.secondaryInterval;
+    if (type !== 'forward' || replay || state.imports[state.symbol] || !Number.isFinite(data?.timestamp)) {
+      callback([], false);
+      return;
+    }
+    const interval = intervalNow();
+    const path = historyRequest({ symbol: state.symbol, interval, before: data.timestamp });
+    if (!path) { callback([], false); return; }
+    const requestId = loadingId;
+    const symbol = state.symbol;
+    api(path).then(value => {
+      if (requestId !== loadingId || symbol !== state.symbol || interval !== intervalNow()) { callback([], false); return; }
+      const existing = kind === 'chart' ? allCandles : (target.getDataList?.() || []);
+      const merged = mergeOlderBars(existing, value.candles, data.timestamp);
+      if (kind === 'chart') {
+        allCandles = merged.candles;
+        if (payload) payload = { ...payload, candles: allCandles };
+        renderHeader();
+      }
+      callback(merged.added, historyHasMore({
+        addedCount: merged.added.length,
+        received: Array.isArray(value.candles) ? value.candles.length : 0,
+        requested: HISTORY_PAGE,
+        exhausted: value.meta?.exhausted === true,
+      }));
+    }).catch(() => callback([], false));
+  });
 }
 function syncIndicators() {
   for (const [name,pane] of subPanes) if (!state.indicators.includes(name)) {chart.removeIndicator(pane,name);subPanes.delete(name);}
@@ -181,13 +277,16 @@ function renderOhlc(bar) {
 }
 function delayLabel(meta) {if(!state.autoRefresh&&meta?.provider!=='csv')return '暂停更新';if(meta?.cache==='stale')return '离线缓存';if(meta?.provider==='csv')return '本地 CSV';if(meta?.feedType==='push')return meta.sourceTime>Date.now()+5000?'源时间待核对':Date.now()-meta.sourceTime>15000?'推送未更新':streamState==='live'?'实时推送':streamState==='reconnecting'?'推送重连中':'等待推送';if(meta?.feedType==='poll')return `公开报价 · ${Math.round((meta.pollIntervalMs||3000)/1000)}秒轮询`;return meta?.delayMinutes>0?`延迟 ${meta.delayMinutes} 分钟`:meta?.delayMinutes===0?'在线快照':'延迟未确认'; }
 function renderHeader() {
+  renderChartTime();
   const item = currentInstrument(), bars = visibleCandles(), last = bars.at(-1);
   const quote = replay ? {price:last?.close,change:last?.close-bars[0]?.close,changePercent:bars.length?(last.close/bars[0].close-1)*100:null} : payload?.quote;
   $('#symbol-label').textContent=state.symbol;$('#symbol-mark').innerHTML=symbolMark(state.symbol);$('#instrument-name').textContent=item.name;$('#instrument-badge').innerHTML=symbolMark(state.symbol);activateSymbolMarks($('#symbol-mark'));activateSymbolMarks($('#instrument-badge'));
-  $('#instrument-meta').textContent=`${payload?.meta.exchange||item.exchange||marketNames[item.market]||'本地'} · ${payload?.meta.currency||item.currency||''} · ${delayLabel(liveMeta||payload?.meta)}`;
+  $('#instrument-meta').textContent=`${usStockLabel(item)?usStockLabel(item)+' · ':''}${payload?.meta.exchange||item.exchange||marketNames[item.market]||'本地'} · ${payload?.meta.currency||item.currency||''} · ${delayLabel(liveMeta||payload?.meta)}`;
   $('#interval-label').textContent=state.interval.toUpperCase();
+  const watermark=document.querySelector('.chart-watermark');
+  if(watermark)watermark.innerHTML=`${esc(state.symbol)}<span>${esc(payload?.meta.exchange||item.exchange||marketNames[item.market]||'')}</span>`;
   $('#last-price').textContent=fmt(quote?.price);$('#last-price').className=sign(quote?.change);
-  $('#price-change').textContent=`${Number.isFinite(quote?.change)?(quote.change>=0?'+':'')+fmt(quote.change):'—'}  ${pct(quote?.changePercent/100)}`;
+  $('#price-change').textContent=`${Number.isFinite(quote?.change)?(quote.change>=0?'+':'')+fmt(quote.change):'—'}  ${quotePct(quote?.changePercent)}`;
   $('#price-change').className=sign(quote?.change);
   renderOhlc(last);
   $$('#periods button').forEach(button=>button.classList.toggle('selected',button.dataset.interval===state.interval));
@@ -196,11 +295,11 @@ function renderHeader() {
   $('#connection-dot').style.background=payload?.meta.cache==='stale'||age>20000||streamState==='reconnecting'?'#d5aa62':'';
   $('#data-status').textContent=`${payload?.meta.providerName||'数据源'} · ${bars.length} 根 K线 · ${state.interval.toUpperCase()}`;
   const first=bars[0];const min=bars.length?Math.min(...bars.map(b=>b.low)):null,max=bars.length?Math.max(...bars.map(b=>b.high)):null;
-  $('#instrument-detail').innerHTML=`<h3>${esc(item.name)}</h3><div class="detail-price ${sign(quote?.change)}">${fmt(quote?.price)}</div><div class="detail-change ${sign(quote?.change)}">${pct(quote?.changePercent/100)} <span class="muted">${replay?'回放区间':quote?.changePeriod==='rolling-24h'?'24 小时':'源报价涨跌幅'}</span></div><div class="detail-stats"><div><label>区间最高</label><strong>${fmt(max)}</strong></div><div><label>区间最低</label><strong>${fmt(min)}</strong></div><div><label>载入 K 线</label><strong>${bars.length}</strong></div><div><label>起始交易日</label><strong>${first?shortDate(first.timestamp):'—'}</strong></div></div><p class="detail-source">${esc(liveMeta?.providerName||payload?.meta.providerName||'—')} · ${esc(delayLabel(liveMeta||payload?.meta))}<br>报价时间 ${esc(date(quote?.timestamp||last?.timestamp))}</p>`;
+  $('#instrument-detail').innerHTML=`<h3>${esc(item.name)}</h3><div class="detail-price ${sign(quote?.change)}">${fmt(quote?.price)}</div><div class="detail-change ${sign(quote?.change)}">${quotePct(quote?.changePercent)} <span class="muted">${replay?'回放区间':quote?.changePeriod==='rolling-24h'?'24 小时':'源报价涨跌幅'}</span></div><div class="detail-stats"><div><label>区间最高</label><strong>${fmt(max)}</strong></div><div><label>区间最低</label><strong>${fmt(min)}</strong></div><div><label>载入 K 线</label><strong>${bars.length}</strong></div><div><label>起始交易日</label><strong>${first?shortDate(first.timestamp):'—'}</strong></div></div><p class="detail-source">${esc(liveMeta?.providerName||payload?.meta.providerName||'—')} · ${esc(delayLabel(liveMeta||payload?.meta))}<br>报价时间 ${esc(date(quote?.timestamp||last?.timestamp))}</p>`;
 }
 function renderWatchlist() {
-  const list=state.watchlist.filter(enabledSymbol).map(symbol=>catalog.find(item=>item.symbol===symbol)||{symbol,name:symbol,market:state.imports[symbol]?'local':'us'}).filter(item=>marketFilter==='all'||(marketFilter==='etf'?item.type==='etf':item.market===marketFilter||marketFilter==='futures'&&item.market==='cn-futures'));
-  $('#watchlist').innerHTML=list.length?list.map(item=>{const quote=quotes.get(item.symbol);return `<div class="watch-row ${item.symbol===state.symbol?'selected':''}" role="button" tabindex="0" draggable="true" data-watch="${esc(item.symbol)}"><span class="watch-name">${symbolMark(item.symbol)}<span><span class="ticker">${esc(item.symbol)}</span><span class="company">${esc(item.name)}</span></span></span><span class="watch-price">${fmt(quote?.price)}</span><span class="watch-change ${sign(quote?.change)}">${pct(quote?.changePercent/100)}</span><button class="remove-watch" data-remove-watch="${esc(item.symbol)}" aria-label="从自选移除 ${esc(item.symbol)}">×</button></div>`}).join(''):'<p class="search-hint" style="padding:15px">这个市场还没有自选，点右上角 + 添加。</p>';
+  const list=state.watchlist.filter(enabledSymbol).map(symbol=>catalog.find(item=>item.symbol===symbol)||{symbol,name:symbol,market:state.imports[symbol]?'local':'us'}).filter(item=>matchesMarket(item,marketFilter));
+  $('#watchlist').innerHTML=list.length?list.map(item=>{const quote=quotes.get(item.symbol),label=usStockLabel(item),ticker=marketCategory(item)==='us-binance'?item.baseAsset||item.symbol.replace(/^BINANCE:/,'').replace(/(?:USDT|USDC|USD1)$/,''):item.symbol;return `<div class="watch-row ${item.symbol===state.symbol?'selected':''}" role="button" tabindex="0" draggable="true" data-watch="${esc(item.symbol)}" title="${esc([item.symbol,label,item.name].filter(Boolean).join(' · '))}"><span class="watch-name">${symbolMark(item.symbol)}<span><span class="ticker">${esc(ticker)}</span><span class="company">${label?`<span class="watch-market">${esc(label)}</span> · `:''}${esc(item.name)}</span></span></span><span class="watch-price ${sign(quote?.change)}">${fmt(quote?.price)}</span><span class="watch-change ${sign(quote?.change)}">${quotePct(quote?.changePercent)}</span><button class="remove-watch" data-remove-watch="${esc(item.symbol)}" aria-label="从自选移除 ${esc(item.symbol)}">×</button></div>`}).join(''):'<p class="search-hint" style="padding:15px">这个市场还没有自选，点右上角 + 添加。</p>';
   activateSymbolMarks($('#watchlist'));
   $$('[data-watch]').forEach(row=>{
     row.ondragstart=event=>{row.classList.add('dragging');event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',row.dataset.watch);};
@@ -228,6 +327,25 @@ async function refreshWatchlist() {
 }
 function registerLocalOverlays(){
   registerChartOverlays(registerOverlay);
+  registerPositionOverlays(registerOverlay,{
+    mark:()=>payload?.quote?.price,selected:()=>selectedDrawing,select:showSelection,precision:()=>chart?.getPriceVolumePrecision().price??2,
+    repaint:()=>chart?.updatePane(1,'candle_pane'),cursor:value=>{if($('#chart'))$('#chart').style.cursor=value;},
+    point:event=>chart?.convertFromPixel({x:event.x,y:event.y},{paneId:'candle_pane'}),
+    resolvePoints:points=>{
+      const resolved=points.map(point=>({...point,dataIndex:chart.convertFromPixel({x:chart.convertToPixel(point,{paneId:'candle_pane'}).x},{paneId:'candle_pane'}).dataIndex}));
+      if(resolved[0].dataIndex>resolved[2].dataIndex){const {timestamp,dataIndex}=resolved[0];Object.assign(resolved[0],{timestamp:resolved[2].timestamp,dataIndex:resolved[2].dataIndex});Object.assign(resolved[2],{timestamp,dataIndex});}
+      return resolved;
+    },
+    updatePoints:(id,points)=>{const data=chart.getDataList();chart.overrideOverlay({id,points:points.map(point=>{const next={...point},bar=data[point.dataIndex];if(bar)next.timestamp=bar.timestamp;else delete next.timestamp;return next;})});},
+    initialGeometry:(point,direction,settings)=>{
+      const coordinate=chart.convertToPixel(point,{paneId:'candle_pane'}),pane=chart.getDrawPaneById('candle_pane'),axis=pane.getAxisComponent(),bounds=pane.getMainWidget().getBounding();
+      const half=Math.min(70,Math.max(12,Math.min(coordinate.y-28,bounds.height-coordinate.y-28)));
+      const distance=Math.abs(axis.convertFromPixel(coordinate.y+half)-point.value);
+      const end=chart.convertFromPixel({x:coordinate.x+Math.min(180,Math.max(32,bounds.width-coordinate.x-12))},{paneId:'candle_pane'});
+      return {distance:Math.max(settings.tickSize,distance),end};
+    },
+  });
+  registerStudyOverlays(registerOverlay,{candles:visibleCandles});
   registerOverlay({name:'localNote',totalStep:2,needDefaultPointFigure:true,createPointFigures:({overlay,coordinates})=>{
     const point=coordinates[0];if(!point)return [];
     const text=typeof overlay.extendData==='string'&&overlay.extendData?overlay.extendData:'标注';
@@ -236,36 +354,55 @@ function registerLocalOverlays(){
   registerOverlay({name:'rect',totalStep:3,needDefaultPointFigure:true,createPointFigures:({coordinates,overlay})=>{
     if(coordinates.length<2)return [];
     const x=Math.min(coordinates[0].x,coordinates[1].x),y=Math.min(coordinates[0].y,coordinates[1].y);
-    return [{type:'rect',attrs:{x,y,width:Math.abs(coordinates[1].x-coordinates[0].x),height:Math.abs(coordinates[1].y-coordinates[0].y)},styles:{style:'stroke_fill',borderColor:overlay.styles?.line?.color||'#d4a94e',borderSize:overlay.styles?.line?.size||1,color:'rgba(212,169,78,0.12)'}}];
+    return [{type:'rect',attrs:{x,y,width:Math.abs(coordinates[1].x-coordinates[0].x),height:Math.abs(coordinates[1].y-coordinates[0].y)},styles:{style:'stroke_fill',borderColor:overlay.styles?.line?.color||'#2962ff',borderSize:overlay.styles?.line?.size||1,color:'rgba(41,98,255,0.12)'}}];
   }});
 }
 function drawingKey(){return `${state.symbol}|${state.interval}`;}
 function serializeDrawings(){
   if(!chart||!payload||restoringDrawings)return;
-  state.drawings[drawingKey()]=[...drawingIds].map(id=>chart.getOverlayById(id)).filter(overlay=>overlay&&overlay.id!==pendingDrawing&&!overlay.isDrawing?.()).map(overlay=>({id:overlay.id,name:overlay.name,points:overlay.points.map(({timestamp,dataIndex,value})=>({...Number.isFinite(timestamp)?{timestamp}:{dataIndex},value})),...(overlay.styles?{styles:overlay.styles}:{}),...(overlay.extendData!==undefined?{extendData:overlay.extendData}:{}),visible:drawingVisibility.get(overlay.id)!==false,lock:overlay.lock}));
+  state.drawings[drawingKey()]=[...drawingIds].map(id=>chart.getOverlayById(id)).filter(overlay=>overlay&&overlay.id!==pendingDrawing&&!overlay.isDrawing?.()).map(overlay=>({id:overlay.id,name:overlay.name,points:overlay.points.map(({timestamp,dataIndex,value,xOffset})=>({...Number.isFinite(timestamp)?{timestamp}:{dataIndex},value,...(isFreehand(overlay.name)&&Number.isFinite(xOffset)?{xOffset}:{})})),...(overlay.styles?{styles:overlay.styles}:{}),...(overlay.extendData!==undefined?{extendData:overlay.extendData}:{}),visible:drawingVisibility.get(overlay.id)!==false,lock:overlay.lock,...(Number.isFinite(overlay.zLevel)?{zLevel:overlay.zLevel}:{})}));
   const host=$('#chart');if(host)host.dataset.drawingCount=String(state.drawings[drawingKey()].length);
 }
 const drawingNames={...DRAWING_NAMES,simpleAnnotation:'文字'};
+const drawingIcons={...Object.fromEntries(DRAWING_TOOLS.map(tool=>[tool.name,tool.icon])),simpleAnnotation:'text'};
 function showSelection(overlay){
+  if(isPosition(overlay?.name)){
+    // A drag can finish without a native click. Keep canvas and toolbar selection
+    // together so clicking empty chart space also dismisses the position labels.
+    const overlays=chart?.getChartStore?.().getOverlayStore();
+    if(overlays?.getClickInstanceInfo().instance?.id!==overlay.id)overlays?.setClickInstanceInfo({paneId:'candle_pane',instance:overlay,figureType:2,figureKey:'position-body',figureIndex:-1,attrsIndex:0},{});
+  }
   selectedDrawing=overlay?.id||'';
   const bar=$('#drawing-selection');if(!bar)return;
+  bar.classList.toggle('position-selection',isPosition(overlay?.name));
   bar.classList.toggle('hidden',!selectedDrawing);
   if(!selectedDrawing)return;
-  $('#drawing-selection-label').textContent=drawingNames[overlay.name]||overlay.name;
-  $('#drawing-lock').innerHTML=icon(overlay.lock?'unlock':'lock');
-  $('#drawing-lock').title=overlay.lock?'解锁':'锁定';
+  const label=$('#drawing-selection-label');
+  const drawingName=drawingNames[overlay.name]||overlay.name;
+  label.innerHTML=icon(drawingIcons[overlay.name]||'rectangle');
+  label.title=drawingName;label.setAttribute('aria-label',drawingName);
+  const locked=overlay.lock===true;
+  $('#drawing-lock').innerHTML=icon(locked?'lock':'unlock');
+  $('#drawing-lock').title=locked?'解锁这条画线':'锁定这条画线';
   $('#drawing-lock').setAttribute('aria-label',$('#drawing-lock').title);
+  $('#drawing-lock').setAttribute('aria-pressed',String(locked));
   const color=overlay.styles?.line?.color;
   if(typeof color==='string'&&/^#[0-9a-f]{6}$/i.test(color))$('#drawing-color').value=color;
-  $('#drawing-width').value=String(overlay.styles?.line?.size||1);
+  $('#drawing-width').max=isFreehand(overlay.name)?'24':String(Math.max(4,overlay.styles?.line?.size||1));$('#drawing-width').value=String(overlay.styles?.line?.size||1);
   $('#drawing-line-style').value=overlay.styles?.line?.style||'solid';
+  syncDrawingStyleButton();
   $('#drawing-edit-text').classList.toggle('hidden',!['localNote','simpleAnnotation','simpleTag'].includes(overlay.name));
+  $('#position-settings-button').classList.add('hidden');
+  $('#position-settings-button').disabled=connection?.role==='reader';
   const host=$('#chart');if(host)host.dataset.selectedDrawing=selectedDrawing;
+  if(isPosition(overlay.name))chart?.updatePane(1,'candle_pane');
+  applyDrawingPanelPosition();
 }
 function hideSelection(id){
   if(id&&id!==selectedDrawing)return;
   selectedDrawing='';$('#drawing-selection')?.classList.add('hidden');
   const host=$('#chart');if(host)host.dataset.selectedDrawing='';
+  chart?.updatePane(1,'candle_pane');
 }
 function placeOverlay(config){
   const created=chart.createOverlay({groupId:'user-drawings',mode:magnet,...config,...drawingCallbacks()});
@@ -274,10 +411,11 @@ function placeOverlay(config){
   return id;
 }
 function drawingCallbacks(){return {
-  onDrawEnd:({overlay})=>{if(restoringDrawings)return false;pendingDrawing='';drawingIds.add(overlay.id);const again=currentTool;if(drawingsLocked)chart.overrideOverlay({id:overlay.id,lock:true});currentTool='';commitDrawings();renderDrawingTools();if(keepDrawing&&again&&again!=='localNote')setTimeout(()=>beginDrawing(again,false),0);return false;},
+  onDrawEnd:({overlay})=>{if(restoringDrawings)return false;pendingDrawing='';drawingIds.add(overlay.id);const again=currentTool;if(drawingsLocked)chart.overrideOverlay({id:overlay.id,lock:true});currentTool='';commitDrawings();if(isPosition(overlay.name)||selectedDrawing===overlay.id)showSelection(chart.getOverlayById(overlay.id)||overlay);renderDrawingTools();if(keepDrawing&&again&&again!=='localNote')setTimeout(()=>beginDrawing(again,false),0);return false;},
   onPressedMoveEnd:()=>{commitDrawings();return false;},
-  onRemoved:({overlay})=>{if(restoringDrawings)return false;drawingIds.delete(overlay.id);drawingVisibility.delete(overlay.id);hideSelection(overlay.id);queueMicrotask(()=>commitDrawings());return false;},
+  onRemoved:({overlay})=>{if(restoringDrawings)return false;drawingIds.delete(overlay.id);drawingVisibility.delete(overlay.id);hideSelection(overlay.id);queueMicrotask(()=>{commitDrawings();renderDrawingTools();});return false;},
   onRightClick:event=>{showSelection(event.overlay);drawingMenuFromOverlay=true;openChartMenu(event.pageX??event.x??0,event.pageY??event.y??0,'drawing');queueMicrotask(()=>{drawingMenuFromOverlay=false;});return true;},
+  onDoubleClick:({overlay})=>{if(!overlay.isDrawing?.()){showSelection(overlay);openDrawingSettings();return true;}return false;},
   onSelected:({overlay})=>{if(overlay.groupId==='user-drawings')showSelection(overlay);return false;},
   onDeselected:({overlay})=>{hideSelection(overlay.id);return false;},
 };}
@@ -288,11 +426,14 @@ function restoreDrawings(){
     for(const overlay of saved)if(getSupportedOverlays().includes(overlay.name)){
       drawingVisibility.set(overlay.id,overlay.visible!==false);
       const config={...overlay,groupId:'user-drawings',...drawingCallbacks(),lock:connection?.role==='reader'||overlay.lock,visible:!drawingsHidden&&overlay.visible!==false};
+      const current=chart.getOverlayById(overlay.id);
+      if(current&&current.name!==overlay.name)chart.removeOverlay(overlay.id);
       if(chart.getOverlayById(overlay.id))chart.overrideOverlay(config);else{const id=chart.createOverlay(config);if(id)drawingIds.add(id);}
     }
   }finally{restoringDrawings=false;}
   drawSharedNotes();
   updateDrawingActions();
+  renderDrawingTools();
 }
 function scheduleSave(){if(sharedApplying)return;collaboration?.schedule();connectMarket();clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveState(false),800);}
 async function saveState(show=true){
@@ -309,19 +450,20 @@ async function loadSymbol({refresh=false}={}){
   cancelDrawing();hideSelection();
   const id=++loadingId;const symbol=state.symbol,interval=state.interval;
   $('#connection-status').textContent='正在获取行情…';$('#chart-message').classList.remove('hidden');$('#chart-message').textContent=`正在获取 ${symbol} · ${interval.toUpperCase()} 的真实行情…`;
-  payload=null;liveMeta=null;allCandles=[];liveFeed.close();removeComputed();chart.applyNewData([],false);if(['backtest','data','collab'].includes(activeTab))renderPanel();
+  payload=null;secondaryPayload=null;liveMeta=null;allCandles=[];liveFeed.close();removeComputed();chart.applyNewData([],false);secondaryChart?.applyNewData([],false);renderChartTime();if(['backtest','data','collab'].includes(activeTab))renderPanel();
   try{
-    const value=state.imports[symbol]||await api(`/api/candles?${new URLSearchParams({symbol,interval,limit:800,...(refresh?{refresh:'1'}:{})})}`);
+    const value=state.imports[symbol]||await api(`/api/candles?${new URLSearchParams({symbol,interval,limit:String(INITIAL_BARS),...(refresh?{refresh:'1'}:{})})}`);
     if(id!==loadingId)return;
-    payload=value;allCandles=value.candles;quotes.set(symbol,value.quote);chart.setPriceVolumePrecision(allCandles.at(-1).close<1?6:allCandles.at(-1).close<10?4:2,0);
-    chart.applyNewData(allCandles,false);chart.setBarSpace(7.5);chart.scrollToRealTime();if(!refresh)resetPriceScale(chart);rememberAxis(chart);restoreDrawings();
-    serializeDrawings();drawingHistory.observe(drawingKey(),state.drawings[drawingKey()]||[]);updateDrawingActions();
+    payload=value;allCandles=value.candles;quotes.set(symbol,value.quote);chart.setTimezone(chartTimezone(chartPreferences.timezone,value.meta.timezone));chart.setPriceVolumePrecision(allCandles.at(-1).close<1?6:allCandles.at(-1).close<10?4:2,0);
+    chart.applyNewData(allCandles,canLoadOlder(allCandles,{imported:Boolean(state.imports[symbol])}));chart.setBarSpace(7.5);chart.scrollToRealTime();if(!refresh)resetPriceScale(chart);rememberAxis(chart);restoreDrawings();
+    serializeDrawings();drawingHistory.observe(drawingKey(),state.drawings[drawingKey()]||[]);updateDrawingActions();syncAlertLines();
     $('#chart-message').classList.add('hidden');renderHeader();renderWatchlist();refreshAgentButton();if(activeTab!=='accounts')renderPanel();
     if(state.dual)loadSecondary();connectMarket();scheduleSave();
   }catch(error){
     if(id!==loadingId)return;
-    $('#chart-message').innerHTML=`${esc(error.message)}<br><button class="secondary" id="retry-feed">重试</button> <button class="secondary" id="import-feed">导入 CSV</button>`;
+    $('#chart-message').innerHTML=`${esc(error.message)}<br><button class="secondary" id="retry-feed">重试</button> <button class="secondary" id="import-feed">导入 CSV</button>${symbol.startsWith('PYTH:')?'<button class="primary" id="configure-pyth">配置 PYTH 授权</button>':''}`;
     $('#retry-feed').onclick=()=>loadSymbol({refresh:true});$('#import-feed').onclick=()=>$('#csv-file').click();
+    $('#configure-pyth')?.addEventListener('click',openPythSettings);
     $('#connection-status').textContent='行情暂不可用';$('#instrument-meta').textContent=error.message;
     $('#last-price').textContent='—';$('#price-change').textContent='—';$('#data-status').textContent=`${symbol} · ${interval.toUpperCase()} · 暂无数据`;
     if(activeTab!=='accounts')renderPanel();
@@ -329,39 +471,62 @@ async function loadSymbol({refresh=false}={}){
 }
 async function selectSymbol(symbol){
   if(symbol===state.symbol)return;
-  serializeDrawings();exitReplay(false);stopPine();state.symbol=symbol;renderWatchlist();$('#symbol-label').textContent=symbol;
+  if(replay||replaySelecting)toast('切换标的，已退出 K 线回放。');serializeDrawings();exitReplay(false);stopPine();state.symbol=symbol;renderWatchlist();$('#symbol-label').textContent=symbol;
   if(!state.watchlist.includes(symbol))state.watchlist.push(symbol);
   await loadSymbol();
 }
 async function selectInterval(interval){
   if(interval===state.interval)return;
   if(state.imports[state.symbol]){toast('CSV 数据按导入周期显示；需要其他周期时请导入对应数据。');return;}
-  serializeDrawings();exitReplay(false);stopPine();state.interval=interval;await loadSymbol();
+  if(replay||replaySelecting)toast('切换周期，已退出 K 线回放。');serializeDrawings();exitReplay(false);stopPine();state.interval=interval;await loadSymbol();
 }
 async function loadSecondary({refresh=false}={}){
   if(!state.dual)return;
   const symbol=state.symbol,interval=state.secondaryInterval;
+  const target=secondaryChart,requestId=++secondaryLoadingId;
+  if(!refresh){secondaryPayload=null;target.applyNewData([],false);renderChartTime();}
   try{
-    const value=state.imports[symbol]||await api(`/api/candles?${new URLSearchParams({symbol,interval,limit:800,...(refresh?{refresh:'1'}:{})})}`);
-    if(!state.dual||symbol!==state.symbol||interval!==state.secondaryInterval)return;
+    const value=state.imports[symbol]||await api(`/api/candles?${new URLSearchParams({symbol,interval,limit:String(INITIAL_BARS),...(refresh?{refresh:'1'}:{})})}`);
+    if(!state.dual||requestId!==secondaryLoadingId||target!==secondaryChart||symbol!==state.symbol||interval!==state.secondaryInterval)return;
+    secondaryPayload=value;secondaryChart.setTimezone(chartTimezone(chartPreferences.timezone,value.meta.timezone));
     const last=secondaryChart.getDataList().at(-1);
-    if(refresh&&last&&value.candles.some(bar=>bar.timestamp===last.timestamp)){for(const bar of value.candles.filter(bar=>bar.timestamp>=last.timestamp))secondaryChart.updateData(bar);}else{secondaryChart.applyNewData(value.candles,false);secondaryChart.setBarSpace(5);secondaryChart.scrollToRealTime();}
-  }catch(error){toast(`对照图：${error.message}`);secondaryChart?.applyNewData([],false);}
+    if(refresh&&last&&value.candles.some(bar=>bar.timestamp===last.timestamp)){for(const bar of value.candles.filter(bar=>bar.timestamp>=last.timestamp))secondaryChart.updateData(bar);}else{secondaryChart.applyNewData(value.candles,canLoadOlder(value.candles,{imported:Boolean(state.imports[symbol])}));secondaryChart.setBarSpace(5);secondaryChart.scrollToRealTime();}
+    renderChartTime();
+  }catch(error){if(requestId!==secondaryLoadingId||target!==secondaryChart||symbol!==state.symbol||interval!==state.secondaryInterval)return;secondaryPayload=null;toast(`对照图：${error.message}`);secondaryChart?.applyNewData([],false);renderChartTime();}
 }
 function toggleLayout(){
   if(replay){toast('请先退出回放，再切换双图布局。');return;}
   state.dual=!state.dual;$('#chart-area').classList.toggle('dual',state.dual);$('#chart-secondary').classList.toggle('hidden',!state.dual);
-  if(state.dual){secondaryChart=init('chart-secondary');styleChart(secondaryChart);bindPriceAxisWheel(secondaryChart);secondaryChart.createIndicator('VOL',false,{height:75});
+  if(state.dual){secondaryChart=init('chart-secondary');styleChart(secondaryChart);secondaryChart.setOffsetRightDistance(55);bindPriceAxisWheel(secondaryChart);bindHistory(secondaryChart,'secondary');secondaryChart.createIndicator('VOL',false,{height:75});
     const controls=document.createElement('div');controls.id='secondary-controls';controls.className='secondary-controls';controls.innerHTML=`<span>同标的对照</span><select id="secondary-interval" aria-label="对照图周期">${['5m','15m','30m','1h','4h','1d','1w'].map(value=>`<option ${value===state.secondaryInterval?'selected':''}>${value}</option>`).join('')}</select>`;$('#chart-area').append(controls);$('#secondary-interval').onchange=event=>{state.secondaryInterval=event.target.value;loadSecondary();scheduleSave();};loadSecondary();
-  }else{dispose('chart-secondary');secondaryChart=null;$('#secondary-controls')?.remove();}
+  }else{dispose('chart-secondary');secondaryChart=null;secondaryPayload=null;$('#secondary-controls')?.remove();}
   $('#layout-button').classList.toggle('active',state.dual);chart.resize();scheduleSave();
 }
 
+function userDrawingOverlays(){
+  return [...drawingIds].map(id=>chart?.getOverlayById?.(id)).filter(overlay=>overlay&&overlay.id!==pendingDrawing&&!overlay.isDrawing?.());
+}
+function allDrawingsLocked(){
+  const overlays=userDrawingOverlays();
+  return overlays.length>0&&overlays.every(overlay=>overlay.lock===true);
+}
 function updateDrawingActions(){
-  const values=state.drawings[drawingKey()]||[];
-  drawingsLocked=values.length>0&&values.every(item=>item.lock);
+  drawingsLocked=allDrawingsLocked();
+  const host=$('#chart');if(host)host.dataset.lockedDrawings=String(userDrawingOverlays().filter(overlay=>overlay.lock===true).length);
   if($('#undo-drawing'))$('#undo-drawing').disabled=connection?.role==='reader'||!drawingHistory.canUndo(drawingKey());
   if($('#redo-drawing'))$('#redo-drawing').disabled=connection?.role==='reader'||!drawingHistory.canRedo(drawingKey());
+}
+function toggleAllDrawingLocks(){
+  const next=!allDrawingsLocked();
+  mutateDrawings(()=>{for(const overlay of userDrawingOverlays())chart.overrideOverlay({id:overlay.id,lock:next});});
+  const selected=selectedDrawing&&chart.getOverlayById(selectedDrawing);
+  if(selected)showSelection(selected);
+}
+function toggleDrawingLock(id){
+  const overlay=chart?.getOverlayById(id);if(!overlay)return;
+  mutateDrawings(()=>chart.overrideOverlay({id,lock:overlay.lock!==true}));
+  const next=chart.getOverlayById(id);
+  if(next&&next.id===selectedDrawing)showSelection(next);
 }
 function commitDrawings(){
   if(restoringDrawings||!payload)return;
@@ -374,8 +539,11 @@ function canEditDrawings(){
 }
 function cancelDrawing(){
   closeDrawingMenu();
+  exitMeasurePrep();
+  if(freehandDrag){const pointerId=freehandDrag.pointerId;freehandDrag=null;const host=$('#chart');if(host?.hasPointerCapture(pointerId))host.releasePointerCapture(pointerId);}
+  if(freehandFrame!==null){cancelAnimationFrame(freehandFrame);freehandFrame=null;}
   if(pendingDrawing){const id=pendingDrawing;pendingDrawing='';restoringDrawings=true;try{chart.removeOverlay(id);drawingIds.delete(id);drawingVisibility.delete(id);}finally{restoringDrawings=false;}}
-  currentTool='';renderDrawingTools();
+  currentTool='';$('#chart')?.classList.remove('freehand-ready');renderDrawingTools();
 }
 function beginDrawing(name,announce=true){
   cancelDrawing();if(!name)return;
@@ -385,10 +553,51 @@ function beginDrawing(name,announce=true){
   if((state.drawings[drawingKey()]||[]).length>=200){toast('当前图表最多保存 200 个图形。');return;}
   let extendData;
   if(name==='localNote'){extendData=prompt('输入标注文字','关注价位');if(!extendData?.trim())return;extendData=extendData.trim().slice(0,1000);}
+  if(isPosition(name)){
+    try{extendData=positionSettings(JSON.parse(localStorage.getItem('shanhai-position-defaults')||'{}'));}catch{extendData=positionSettings();}
+    if(!localStorage.getItem('shanhai-position-defaults'))extendData={...extendData,lotSize:currentInstrument().market==='crypto'?.001:1,tickSize:10**-(allCandles.at(-1).close<1?6:2)};
+  }
   if(drawingsHidden)toggleDrawingVisibility();
   const choice=drawingChoice(name);if(choice){toolChoices[choice.group]=name;localStorage.setItem('shanhai-drawing-tools',JSON.stringify(toolChoices));}
-  currentTool=name;pendingDrawing=placeOverlay({name,...(extendData?{extendData}:{})});hidePricePlus();renderDrawingTools();
-  if(announce)toast(`${drawingNames[name]||name}：在图上点击放置锚点，Esc 取消。`);
+  currentTool=name;pendingDrawing=isFreehand(name)?'':placeOverlay({name,...(extendData?{extendData}:{})});$('#chart').classList.toggle('freehand-ready',isFreehand(name));hidePricePlus();renderDrawingTools();
+  if(isFreehand(name)){if(announce)toast(`${drawingNames[name]}：按住鼠标拖动绘制，松开完成；Esc 取消。`);return;}
+  if(announce)toast(isPosition(name)?'点击入场位置放置仓位；拖左侧手柄调止盈止损，右侧手柄调宽度，双击打开设置。':`${drawingNames[name]||name}：在图上点击放置锚点，Esc 取消。`);
+}
+function freehandSample(event){
+  const root=chart?.getDom(),pane=chart?.getDrawPaneById('candle_pane'),bounds=pane?.getMainWidget().getBounding();if(!root||!bounds)return null;
+  const rect=root.getBoundingClientRect(),x=event.clientX-rect.left-(bounds.left||0),y=event.clientY-rect.top-(bounds.top||0);
+  if(x<0||y<0||x>bounds.width||y>bounds.height)return null;
+  const converted=chart.convertFromPixel({x,y},{paneId:'candle_pane'}),dataIndex=converted.dataIndex,value=pane.getAxisComponent().convertFromPixel(y);
+  if(!Number.isInteger(dataIndex)||!Number.isFinite(value))return null;
+  const timestamp=chart.getDataList()[dataIndex]?.timestamp,center=chart.convertToPixel({dataIndex,value},{paneId:'candle_pane'}).x;
+  return {x,y,point:{...(Number.isFinite(timestamp)?{timestamp}:{dataIndex}),value,xOffset:Math.max(-1,Math.min(1,(x-center)/chart.getBarSpace()))}};
+}
+function onFreehandDown(event){
+  if(event.button!==0||!isFreehand(currentTool)||!payload||connection?.role==='reader')return;
+  const sample=freehandSample(event);if(!sample)return;
+  event.preventDefault();event.stopImmediatePropagation();hideSelection();
+  const name=currentTool,id=placeOverlay({name,points:[sample.point],lock:false});if(!id)return;
+  pendingDrawing=id;freehandDrag={id,name,pointerId:event.pointerId,samples:[sample]};$('#chart').setPointerCapture(event.pointerId);
+}
+function onFreehandMove(event){
+  const drag=freehandDrag;if(!drag||drag.pointerId!==event.pointerId)return;
+  event.preventDefault();event.stopImmediatePropagation();
+  const sample=freehandSample(event),last=drag.samples.at(-1);if(!sample||Math.hypot(sample.x-last.x,sample.y-last.y)<1.5)return;
+  drag.samples.push(sample);if(drag.samples.length>1024)drag.samples=simplifyStroke(drag.samples,.8,512);
+  if(freehandFrame===null)freehandFrame=requestAnimationFrame(()=>{freehandFrame=null;if(freehandDrag===drag)chart.overrideOverlay({id:drag.id,points:simplifyStroke(drag.samples).map(sample=>sample.point)});});
+}
+function onFreehandUp(event){
+  const drag=freehandDrag;if(!drag||drag.pointerId!==event.pointerId)return;
+  event.preventDefault();event.stopImmediatePropagation();
+  if(event.type==='pointercancel'){cancelDrawing();return;}
+  const sample=freehandSample(event);if(sample&&Math.hypot(sample.x-drag.samples.at(-1).x,sample.y-drag.samples.at(-1).y)>.2)drag.samples.push(sample);
+  freehandDrag=null;pendingDrawing='';currentTool='';$('#chart').classList.remove('freehand-ready');
+  if($('#chart').hasPointerCapture(event.pointerId))$('#chart').releasePointerCapture(event.pointerId);
+  chart.overrideOverlay({id:drag.id,points:simplifyStroke(drag.samples).map(sample=>sample.point),lock:drawingsLocked});
+  const completed=chart.getOverlayById(drag.id);
+  chart.getChartStore().getOverlayStore().setClickInstanceInfo({paneId:'candle_pane',instance:completed,figureType:2,figureKey:'freehand-stroke',figureIndex:0,attrsIndex:0},{});
+  commitDrawings();showSelection(completed);renderDrawingTools();
+  if(keepDrawing)setTimeout(()=>beginDrawing(drag.name,false),0);
 }
 function mutateDrawings(action){
   if(!canEditDrawings()||!payload)return;
@@ -411,25 +620,85 @@ function removeSelectedDrawing(){
   if(!selectedDrawing)return;const id=selectedDrawing;
   mutateDrawings(()=>{chart.removeOverlay(id);drawingIds.delete(id);drawingVisibility.delete(id);hideSelection();});
 }
-function copySelectedDrawing(){
-  const overlay=chart.getOverlayById(selectedDrawing);if(!overlay)return;
-  chartClipboard={kind:'drawing',drawing:snapshotOverlay(overlay)};
-  mutateDrawings(()=>{const points=overlay.points.map(point=>({...point,...(Number.isFinite(point.value)?{value:point.value*1.003}:{})}));placeOverlay({name:overlay.name,points,extendData:overlay.extendData,styles:overlay.styles,lock:false});});
+function copySelectedDrawing(){cloneSelectedDrawing();}
+function cloneSelectedDrawing(){
+  closeDrawingToolbarMenus();
+  const overlay=chart?.getOverlayById(selectedDrawing);if(!overlay||!canEditDrawings())return;
+  if(userDrawingCount()>=200){toast('当前图表最多保存 200 个图形。');return;}
+  const shift=({ '1m':60000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'4h':14400000,'1d':86400000,'1w':604800000 })[state.interval]||86400000;
+  const points=overlay.points.map(point=>{
+    const next={...point};
+    if(Number.isFinite(point.dataIndex))next.dataIndex=point.dataIndex+3;
+    if(Number.isFinite(point.timestamp))next.timestamp=point.timestamp+shift*3;
+    if(Number.isFinite(point.value))next.value=point.value*(point.value<0?0.997:1.004);
+    return next;
+  });
+  let id='';
+  mutateDrawings(()=>{id=placeOverlay({name:overlay.name,points,styles:plainClone(overlay.styles),...(overlay.extendData!==undefined?{extendData:plainClone(overlay.extendData)}:{}),lock:false,visible:true});});
+  const created=id&&chart.getOverlayById(id);
+  if(!created){toast('没有克隆成功。');return;}
+  chart.getChartStore?.().getOverlayStore?.().setClickInstanceInfo?.({paneId:'candle_pane',instance:created,figureType:2,figureKey:'',figureIndex:-1,attrsIndex:-1},{});
+  showSelection(created);toast('已克隆这条画线，并选中副本。');
+}
+function drawingZExtremes(){
+  const levels=[...drawingIds].map(id=>chart.getOverlayById(id)?.zLevel).filter(Number.isFinite);
+  return {min:levels.length?Math.min(...levels):0,max:levels.length?Math.max(...levels):0};
+}
+function restackSelectedDrawing(direction){
+  closeDrawingToolbarMenus();
+  const overlay=chart?.getOverlayById(selectedDrawing);if(!overlay||!canEditDrawings())return;
+  const {min,max}=drawingZExtremes();
+  const zLevel=direction==='front'?max+1:min-1;
+  mutateDrawings(()=>chart.overrideOverlay({id:overlay.id,zLevel}));
+  showSelection(chart.getOverlayById(overlay.id)||overlay);
+  toast(direction==='front'?'已置于顶层。':'已置于底层。');
 }
 function editDrawingText(){
   const overlay=chart.getOverlayById(selectedDrawing);if(!overlay||!canEditDrawings())return;
   const text=prompt('编辑标注文字',String(overlay.extendData||''));if(text===null||!text.trim())return;
   mutateDrawings(()=>chart.overrideOverlay({id:overlay.id,extendData:text.trim().slice(0,1000)}));
 }
+function openPositionEditor(id=selectedDrawing){
+  const overlay=chart.getOverlayById(id);if(!overlay||!isPosition(overlay.name))return;
+  cancelDrawing();closeChartMenu();
+  openModal(overlay.name==='longPosition'?'多头仓位':'空头仓位',`<div id="position-editor"></div>`);
+  const currency=payload?.meta.currency||currentInstrument().currency||'';
+  const apply=value=>{
+    if(!canEditDrawings())return false;
+    const current=chart.getOverlayById(id);if(!current){toast('该仓位图形已被移除。');return false;}
+    const name=value.direction==='long'?'longPosition':'shortPosition',prices=[value.entry,value.stop,value.target];
+    const points=current.points.map((point,index)=>({...point,value:prices[index]}));
+    mutateDrawings(()=>{
+      if(current.name===name)chart.overrideOverlay({id,points,extendData:value.settings});
+      else{const styles=structuredClone(current.styles);chart.removeOverlay(id);drawingIds.delete(id);placeOverlay({id,name,points,styles,extendData:value.settings,lock:current.lock,visible:drawingVisibility.get(id)!==false});}
+    });
+    localStorage.setItem('shanhai-position-defaults',JSON.stringify(value.settings));
+    showSelection(chart.getOverlayById(id));return true;
+  };
+  mountPositionEditor({container:$('#position-editor'),plan:overlay,mark:payload?.quote?.price,currency,
+    onCancel:()=>$('#modal').close(),onDefaults:settings=>{localStorage.setItem('shanhai-position-defaults',JSON.stringify(settings));toast('已保存为新建仓位的默认设置。');},
+    onSave:value=>{if(apply(value)){$('#modal').close();toast('仓位计划已更新，盈亏比和数量按当前参数重算。');}},
+    onExport:value=>downloadJson(`${state.symbol}-${value.direction}-仓位计划.json`,{schemaVersion:1,kind:'position-plan',symbol:state.symbol,interval:state.interval,currency,createdAt:new Date().toISOString(),...value,source:'chart-plan'}),
+    onCopy:value=>copyText(`${state.symbol} ${value.direction==='long'?'多头':'空头'}仓位计划\n入场 ${value.entry} · 止损 ${value.stop} · 止盈 ${value.target}\n毛盈亏比 1:${value.metrics.grossRatio.toFixed(4)} · 净盈亏比 1:${value.metrics.netRatio.toFixed(4)}\n数量 ${value.metrics.quantity} · 风险 ${fmt(value.metrics.risk)} ${currency} · 收益 ${fmt(value.metrics.reward)} ${currency}\n费用 ${value.settings.feeBps} bp · 滑点 ${value.settings.slippageBps} bp · 乘数 ${value.settings.multiplier}`),
+    onAlerts:value=>{
+      if(!apply(value))return;let added=0;
+      for(const price of [value.stop,value.target]){
+        if(state.alerts.some(alert=>alert.symbol===state.symbol&&alert.price===price&&!alert.firedAt))continue;
+        state.alerts.push({id:crypto.randomUUID(),symbol:state.symbol,price,direction:'reach',message:`达到 ${fmt(price)}`,createdAt:Date.now(),firedAt:null,paused:false});added++;
+      }
+      scheduleSave();$('#modal').close();showAlertsWidget('list');toast(`已添加 ${added} 条止盈 / 止损警报。价格达到目标价才会通知。`);
+    },
+  });
+}
 function renderDrawingTools(){
-  renderDrawingToolbar({host:$('#drawing-tools'),active:currentTool,choices:toolChoices,magnet,keepDrawing,locked:drawingsLocked,hidden:drawingsHidden,readonly:connection?.role==='reader',onSelect:beginDrawing,onAction:id=>{
+  renderDrawingToolbar({host:$('#drawing-tools'),active:currentTool,choices:toolChoices,magnet,keepDrawing,locked:drawingsLocked,hidden:drawingsHidden,readonly:connection?.role==='reader',shortcutFor:name=>toolShortcutLabel(name,shortcutOverrides),onSelect:beginDrawing,onAction:id=>{
     if(id==='magnet-tool'){magnet={normal:'weak_magnet',weak_magnet:'strong_magnet',strong_magnet:'normal'}[magnet];chart.overrideOverlay({groupId:'user-drawings',mode:magnet});renderDrawingTools();}
     else if(id==='keep-drawing-tool'){keepDrawing=!keepDrawing;localStorage.setItem('shanhai-keep-drawing',keepDrawing?'1':'0');renderDrawingTools();}
-    else if(id==='lock-tool')mutateDrawings(()=>chart.overrideOverlay({groupId:'user-drawings',lock:!drawingsLocked}));
+    else if(id==='lock-tool')toggleAllDrawingLocks();
     else if(id==='hide-drawings-tool')toggleDrawingVisibility();
     else if(id==='drawing-manager-tool')openDrawingManager();
     else if(id==='shortcuts-tool')openShortcuts();
-    else if(id==='alert-tool')setTab('alerts');
+    else if(id==='alert-tool')openAlerts();
     else if(id==='delete-drawings')mutateDrawings(()=>{chart.removeOverlay({groupId:'user-drawings'});drawingIds.clear();drawingVisibility.clear();hideSelection();});
   }});
   updateDrawingActions();
@@ -441,25 +710,154 @@ function openDrawingManager(){
 }
 function renderDrawingObjects(){
   const values=state.drawings[drawingKey()]||[],readonly=connection?.role==='reader';
-  $('#drawing-object-list').innerHTML=values.length?values.map(item=>`<div class="drawing-object"><button class="object-name" data-object-focus="${esc(item.id)}"><strong>${esc(drawingNames[item.name]||item.name)}</strong><small>${esc(typeof item.extendData==='string'?item.extendData:item.points.map(point=>fmt(point.value)).join(' → '))}</small></button><button class="icon-button" data-object-visible="${esc(item.id)}" title="${item.visible===false?'显示':'隐藏'}图形" aria-label="${item.visible===false?'显示':'隐藏'}图形" ${readonly?'disabled':''}>${icon(item.visible===false?'eyeOff':'eye')}</button><button class="icon-button" data-object-lock="${esc(item.id)}" title="${item.lock?'解锁':'锁定'}图形" aria-label="${item.lock?'解锁':'锁定'}图形" ${readonly?'disabled':''}>${icon(item.lock?'lock':'unlock')}</button><button class="icon-button" data-object-remove="${esc(item.id)}" aria-label="删除图形" title="删除图形" ${readonly?'disabled':''}>${icon('trash')}</button></div>`).join(''):'<p class="search-hint object-empty">当前图表还没有图形。使用左侧工具开始绘图。</p>';
-  $$('[data-object-focus]').forEach(button=>button.onclick=()=>{const overlay=chart.getOverlayById(button.dataset.objectFocus);if(!overlay)return;if(overlay.points[0]?.timestamp)chart.scrollToTimestamp(overlay.points[0].timestamp);$('#modal').close();if(overlay.visible)showSelection(overlay);else toast('该图形已隐藏，可在对象管理中显示。');});
+  $('#drawing-object-list').innerHTML=values.length?values.map(item=>`<div class="drawing-object"><button class="object-name" data-object-focus="${esc(item.id)}"><strong>${esc(drawingNames[item.name]||item.name)}</strong><small>${esc(typeof item.extendData==='string'?item.extendData:item.points.map(point=>fmt(point.value)).join(' → '))}</small></button><button class="icon-button" data-object-visible="${esc(item.id)}" title="${item.visible===false?'显示':'隐藏'}图形" aria-label="${item.visible===false?'显示':'隐藏'}图形" ${readonly?'disabled':''}>${icon(item.visible===false?'eyeOff':'eye')}</button><button class="icon-button" data-object-lock="${esc(item.id)}" title="${item.lock?'解锁':'锁定'}图形" aria-label="${item.lock?'解锁':'锁定'}图形" aria-pressed="${item.lock?'true':'false'}" ${readonly?'disabled':''}>${icon(item.lock?'lock':'unlock')}</button><button class="icon-button" data-object-remove="${esc(item.id)}" aria-label="删除图形" title="删除图形" ${readonly?'disabled':''}>${icon('trash')}</button></div>`).join(''):'<p class="search-hint object-empty">当前图表还没有图形。使用左侧工具开始绘图。</p>';
+  $$('[data-object-focus]').forEach(button=>button.onclick=()=>{
+    const overlay=chart.getOverlayById(button.dataset.objectFocus);if(!overlay)return;
+    if(overlay.points[0]?.timestamp){
+      chart.scrollToTimestamp(overlay.points[0].timestamp);
+      const pixels=chart.convertToPixel(overlay.points,{paneId:'candle_pane'}),xs=pixels.map(point=>point.x).filter(Number.isFinite);
+      const width=chart.getDrawPaneById?.('candle_pane')?.getMainWidget?.()?.getBounding?.()?.width;
+      if(xs.length&&width)chart.scrollByDistance(width/2-(Math.min(...xs)+Math.max(...xs))/2);
+    }
+    $('#modal').close();if(overlay.visible)showSelection(overlay);else toast('该图形已隐藏，可在对象管理中显示。');
+  });
   $$('[data-object-visible]').forEach(button=>button.onclick=()=>mutateDrawings(()=>{const id=button.dataset.objectVisible,visible=drawingVisibility.get(id)===false;drawingVisibility.set(id,visible);chart.overrideOverlay({id,visible:!drawingsHidden&&visible});if(!visible)hideSelection(id);}));
-  $$('[data-object-lock]').forEach(button=>button.onclick=()=>mutateDrawings(()=>{const id=button.dataset.objectLock,overlay=chart.getOverlayById(id);chart.overrideOverlay({id,lock:!overlay.lock});}));
+  $$('[data-object-lock]').forEach(button=>button.onclick=()=>toggleDrawingLock(button.dataset.objectLock));
   $$('[data-object-remove]').forEach(button=>button.onclick=()=>mutateDrawings(()=>{const id=button.dataset.objectRemove;chart.removeOverlay(id);drawingIds.delete(id);drawingVisibility.delete(id);hideSelection(id);}));
 }
 function openShortcuts(){
-  openModal('快捷键',`<div class="shortcut-list">${SHORTCUTS.map(item=>`<div><span>${esc(item.label)}</span><kbd>${esc(item.display)}</kbd></div>`).join('')}</div><p class="search-hint">输入框和编辑器保留原生编辑快捷键。方向键平移，加号减号缩放，逗号和句号切换周期。绘图历史按品种与周期分别记录。</p>`);
+  const rows=[`<div class="gesture"><span>${esc(MEASURE_GESTURE.label)}</span><kbd title="测量手势，不能改为键盘快捷键">${esc(MEASURE_GESTURE.display)}</kbd></div>`].concat(SHORTCUTS.map(item=>`<div class="${rebindingId===item.id?'capturing':''}"><span>${esc(item.label)}</span><button type="button" class="shortcut-key" data-rebind="${esc(item.id)}" title="点击后按下新的快捷键">${esc(shortcutDisplay(item.id,shortcutOverrides))}</button></div>`));
+  openModal('快捷键',`<div class="shortcut-list">${rows.join('')}</div><div class="shortcut-actions"><button type="button" class="quiet" id="reset-shortcuts">恢复默认</button><p class="search-hint" id="shortcut-capture" style="margin:0">${rebindingId?'请按新的快捷键':'点击键位后按下新的组合。Esc 取消修改。冲突时会提示，不会覆盖另一条。'}</p></div><p class="search-hint">输入框和编辑器保留原生编辑快捷键。Shift，再点两下是测量手势：按一次 Shift 后松手，在图上点起点，移动鼠标，再点终点。它不在键盘映射里。方向键平移，加号减号缩放，逗号和句号切换周期。</p>`);
+  $$('[data-rebind]').forEach(button=>button.onclick=()=>{rebindingId=button.dataset.rebind;openShortcuts();});
+  $('#reset-shortcuts').onclick=()=>{shortcutOverrides={};rebindingId=null;localStorage.removeItem(SHORTCUT_STORAGE_KEY);renderDrawingTools();openShortcuts();toast('快捷键已恢复默认。');};
+  if(rebindingId)$('#shortcut-capture')?.focus?.();
+}
+function saveShortcutOverride(id,chord){
+  shortcutOverrides={...shortcutOverrides,[id]:chord};
+  localStorage.setItem(SHORTCUT_STORAGE_KEY,JSON.stringify(shortcutOverrides));
+}
+function pointAtClient(clientX,clientY){
+  const root=chart?.getDom?.();
+  const pane=chart?.getDrawPaneById?.('candle_pane');
+  const bounding=pane?.getMainWidget?.()?.getBounding?.();
+  const axis=pane?.getAxisComponent?.();
+  if(!chart||!root||!bounding||!axis)return null;
+  const box=root.getBoundingClientRect();
+  const x=clientX-box.left-(bounding.left||0);
+  const y=clientY-box.top-(bounding.top||0);
+  if(x<-1||y<-1||x>(bounding.width||0)+1||y>(bounding.height||0)+1)return null;
+  const converted=chart.convertFromPixel?.({x,y},{paneId:'candle_pane'})||{};
+  const list=chart.getDataList?.()||[];
+  let index=Number(converted.dataIndex);
+  if(!Number.isInteger(index))return null;
+  if(index<0)index=0;
+  if(index>list.length-1)index=list.length-1;
+  const bar=list[index];
+  const value=axis.convertFromPixel?.(y);
+  if(!bar||!Number.isFinite(bar.timestamp)||!Number.isFinite(value)||value<=0)return null;
+  return {value,timestamp:bar.timestamp,dataIndex:index};
+}
+function copyMeasurePoint(point){return point?{value:point.value,timestamp:point.timestamp,dataIndex:point.dataIndex}:null;}
+function markShiftMeasure(){const host=$('#chart');if(!host)return;if(chart?.getOverlayById?.(SHIFT_MEASURE_ID))host.dataset.shiftMeasure='1';else delete host.dataset.shiftMeasure;}
+function measureHintText(){
+  if(measurePhase==='tracking')return '测量：移动鼠标，再点一下定终点。Esc 取消';
+  if(measurePhase==='fixed')return '测量：已定住。Esc、Shift 或点空白清除';
+  return '测量：点一下定起点。Esc 取消';
+}
+function syncMeasureReady(){
+  document.body.classList.toggle('measure-ready',measureArmed);
+  const host=$('#chart');
+  if(host){if(measureArmed){host.dataset.measureReady='1';host.dataset.measurePhase=measurePhase;}else{delete host.dataset.measureReady;delete host.dataset.measurePhase;}}
+  let hint=$('#measure-hint');
+  if(!hint&&measureArmed&&$('#chart-area')){hint=document.createElement('div');hint.id='measure-hint';hint.className='measure-hint';$('#chart-area').append(hint);}
+  if(hint){hint.textContent=measureHintText();hint.classList.toggle('hidden',!measureArmed);}
+}
+function setMeasureArmed(on){
+  measureArmed=on;
+  if(!on){shiftHoldForMeasure=false;measurePhase='off';measureAnchor=null;measureClick=null;}
+  else if(measurePhase==='off')measurePhase='ready';
+  syncMeasureReady();
+}
+function clearShiftMeasure(){
+  shiftMeasureDrag=null;
+  if(!chart?.getOverlayById?.(SHIFT_MEASURE_ID)){markShiftMeasure();return;}
+  restoringDrawings=true;
+  try{chart.removeOverlay(SHIFT_MEASURE_ID);}finally{restoringDrawings=false;}
+  markShiftMeasure();
+}
+function exitMeasurePrep(){setMeasureArmed(false);clearShiftMeasure();}
+function measureKeyBlocked(event){
+  if(currentTool||pendingDrawing||rebindingId||$('#modal')?.open)return true;
+  return Boolean(event.target?.closest?.('input,textarea,select,[contenteditable="true"]'));
+}
+function onMeasureKeyDown(event){
+  if(event.repeat||measureKeyBlocked(event))return;
+  if(event.key==='Shift'&&!event.altKey&&!event.ctrlKey&&!event.metaKey){
+    if(measureArmed)exitMeasurePrep();
+    else{setMeasureArmed(true);shiftHoldForMeasure=true;}
+    return;
+  }
+  if(shiftHoldForMeasure&&event.shiftKey&&event.key!=='Shift'){shiftHoldForMeasure=false;setMeasureArmed(false);}
+}
+function onMeasureKeyUp(event){if(event.key==='Shift')shiftHoldForMeasure=false;}
+function showShiftMeasure(start,end){
+  if(!chart||!start||!end)return;
+  const points=[copyMeasurePoint(start),copyMeasurePoint(end)];
+  if(chart.getOverlayById(SHIFT_MEASURE_ID))chart.overrideOverlay({id:SHIFT_MEASURE_ID,points,lock:true});
+  else chart.createOverlay({id:SHIFT_MEASURE_ID,name:'datePriceRange',groupId:'shift-measure',lock:true,points});
+  const host=$('#chart');
+  if(host){host.dataset.measureStart=`${points[0].dataIndex}|${points[0].value}`;host.dataset.measureEnd=`${points[1].dataIndex}|${points[1].value}`;}
+  markShiftMeasure();
+}
+function onMeasurePointerMove(event){
+  if(measurePhase!=='tracking'||!measureAnchor)return;
+  const end=pointAtClient(event.clientX,event.clientY);
+  if(end)showShiftMeasure(measureAnchor,end);
+}
+function onShiftMeasureDown(event){
+  if(event.button!==0||!chart||!measureArmed||currentTool||pendingDrawing)return;
+  if(event.target?.closest?.('input,textarea,select,[contenteditable="true"]'))return;
+  const point=pointAtClient(event.clientX,event.clientY);
+  if(measurePhase==='fixed'){if(point){event.preventDefault();event.stopPropagation();exitMeasurePrep();}return;}
+  if(!point)return;
+  event.preventDefault();event.stopPropagation();
+  measureClick={point,x:event.clientX,y:event.clientY,phase:measurePhase};
+}
+function onShiftMeasureUp(event){
+  if(!measureClick||event.button!==0||!measureArmed)return;
+  const click=measureClick;measureClick=null;
+  const point=pointAtClient(event.clientX,event.clientY)||click.point;
+  if(click.phase==='tracking'){showShiftMeasure(measureAnchor,point);measurePhase='fixed';syncMeasureReady();return;}
+  measureAnchor=copyMeasurePoint(point);measurePhase='tracking';syncMeasureReady();
 }
 function applyChartPreferences(next){
+  const resetScale=('scale' in next&&next.scale!==chartPreferences.scale)||('reverse' in next&&next.reverse!==chartPreferences.reverse);
   Object.assign(chartPreferences,normalizeChartPreferences({...chartPreferences,...next}));
   localStorage.setItem('shanhai-chart-preferences',JSON.stringify(chartPreferences));
-  for(const target of [chart,secondaryChart])if(target){styleChart(target);resetPriceScale(target);}
+  for(const target of [chart,secondaryChart])if(target){styleChart(target);if(resetScale)resetPriceScale(target);}
+  renderChartTime();
+}
+function timezoneOptions(){
+  const options=[...CHART_TIMEZONES];if(!options.some(([zone])=>zone===chartPreferences.timezone))options.push([chartPreferences.timezone,chartPreferences.timezone]);
+  return options.map(([zone,label])=>`<option value="${esc(zone)}" ${chartPreferences.timezone===zone?'selected':''}>${esc(label)}</option>`).join('');
+}
+function openTimezoneSettings(){
+  closeChartMenu();
+  openModal('图表时区',`<form id="timezone-form" class="chart-settings"><label>时区<select name="timezone" aria-label="图表时区">${timezoneOptions()}</select></label><p class="search-hint">时间轴与十字光标使用所选时区，自动处理夏令时。交易所时区以行情源元数据为准。</p><div class="settings-actions"><button class="primary">应用时区</button></div></form>`);
+  $('#timezone-form').onsubmit=event=>{event.preventDefault();applyChartPreferences({timezone:new FormData(event.target).get('timezone')});$('#modal').close();};
+}
+function openGoToDate(){
+  closeChartMenu();const bars=visibleCandles();if(!bars.length){toast('请先加载行情。');return;}
+  const zone=chartTimezone(chartPreferences.timezone,payload?.meta.timezone),first=chartDateTime(bars[0].timestamp,zone),last=chartDateTime(bars.at(-1).timestamp,zone);
+  openModal('跳转到日期',`<form id="go-to-date-form" class="chart-settings"><label>日期和时间<input type="datetime-local" name="datetime" aria-label="跳转日期和时间" value="${last}" required></label><p class="search-hint">${esc(timezoneLabel(zone))}<br>已加载范围：${esc(first.replace('T',' '))} — ${esc(last.replace('T',' '))}<br>选择休市时段时定位到下一根已加载 K 线；更早历史可先向左拖动图表加载。</p><p id="go-to-date-error" class="negative" role="status"></p><div class="settings-actions"><button type="button" class="secondary" id="go-to-date-cancel">取消</button><button class="primary">跳转</button></div></form>`);
+  $('#go-to-date-cancel').onclick=()=>$('#modal').close();
+  $('#go-to-date-form').onsubmit=event=>{event.preventDefault();const value=new FormData(event.target).get('datetime'),index=findChartBar(bars,value,zone);if(index===null||index<0){$('#go-to-date-error').textContent='所选日期超出已加载范围，请先加载该时段的行情。';return;}chart.scrollToDataIndex(index);$('#chart').dataset.goToIndex=String(index);$('#modal').close();};
 }
 function openChartSettings(){
   closeChartMenu();
   const p=chartPreferences;
-  openModal('图表设置',`<form id="chart-settings-form" class="chart-settings"><label>价格刻度<select name="scale" aria-label="价格刻度类型"><option value="normal" ${p.scale==='normal'?'selected':''}>线性</option><option value="log" ${p.scale==='log'?'selected':''}>对数</option><option value="percentage" ${p.scale==='percentage'?'selected':''}>百分比</option></select></label>${[['grid','显示网格线'],['crosshair','显示十字光标'],['lastPrice','显示最新价标记'],['reverse','反转价格轴'],['watermark','显示图表水印']].map(([key,label])=>`<label class="setting-switch"><span>${label}</span><input type="checkbox" name="${key}" ${p[key]?'checked':''}></label>`).join('')}<div class="settings-actions"><button type="button" class="quiet" id="reset-chart-settings">恢复默认</button><button class="primary">应用设置</button></div></form><p class="search-hint">外观设置保存在本机浏览器，适用于主图和对照图。对数刻度适合正价格序列。</p>`);
-  $('#chart-settings-form').onsubmit=event=>{event.preventDefault();const values=new FormData(event.target);applyChartPreferences({scale:values.get('scale'),...Object.fromEntries(['grid','crosshair','lastPrice','reverse','watermark'].map(key=>[key,values.has(key)]))});$('#modal').close();};
+  openModal('图表设置',`<form id="chart-settings-form" class="chart-settings"><label>价格刻度<select name="scale" aria-label="价格刻度类型"><option value="normal" ${p.scale==='normal'?'selected':''}>线性</option><option value="log" ${p.scale==='log'?'selected':''}>对数</option><option value="percentage" ${p.scale==='percentage'?'selected':''}>百分比</option></select></label><label>图表时区<select name="timezone" aria-label="图表时区">${timezoneOptions()}</select></label>${[['grid','显示网格线'],['crosshair','显示十字光标'],['lastPrice','显示最新价标记'],['lastPriceLine','显示最新价线'],['countdown','当前 K 线结束倒计时'],['reverse','反转价格轴'],['watermark','显示图表水印']].map(([key,label])=>`<label class="setting-switch"><span>${label}</span><input type="checkbox" name="${key}" ${p[key]?'checked':''}></label>`).join('')}<div class="settings-actions"><button type="button" class="quiet" id="reset-chart-settings">恢复默认</button><button class="primary">应用设置</button></div></form><p class="search-hint">设置保存在本机，适用于主图和对照图。倒计时附在最新价标记下；回放、离线缓存、暂停更新或当前 K 线已结束时隐藏。延迟行情仅在周期大于延迟时显示；日线和周线需有已知收盘时间。</p>`);
+  $('#chart-settings-form').onsubmit=event=>{event.preventDefault();const values=new FormData(event.target);applyChartPreferences({scale:values.get('scale'),timezone:values.get('timezone'),...Object.fromEntries(['grid','crosshair','lastPrice','lastPriceLine','countdown','reverse','watermark'].map(key=>[key,values.has(key)]))});$('#modal').close();};
   $('#reset-chart-settings').onclick=()=>{applyChartPreferences(DEFAULT_CHART_PREFERENCES);openChartSettings();};
 }
 async function toggleFullscreen(){
@@ -496,7 +894,29 @@ function rememberPointer(clientX,clientY){
   return {price:Number.isFinite(yPrice)?yPrice:latestPrice(),timestamp:Number.isFinite(bar?.timestamp)?bar.timestamp:(Number.isFinite(chartPointer.timestamp)?chartPointer.timestamp:null)};
 }
 function resetChartView(){if(!chart)return;resetPriceScale(chart);chart.setBarSpace(7.5);chart.scrollToRealTime();}
-function hidePricePlus(){$('#price-plus')?.classList.add('hidden');}
+function tooltipStore(){return chart?.getChartStore?.()?.getTooltipStore?.();}
+function pinPlusCrosshair(clientY){
+  const main=chart?.getDom?.('candle_pane','main'),store=tooltipStore();
+  if(!main||!store||!chartPreferences.crosshair)return;
+  const y=clientY-main.getBoundingClientRect().top;
+  if(!Number.isFinite(y))return;
+  let x=plusCrosshairX;
+  if(!Number.isFinite(x)){
+    const count=chart.getDataList?.().length||0;
+    const pixel=count?chart.convertToPixel?.({dataIndex:count-1},{paneId:'candle_pane'}):null;
+    x=Number.isFinite(pixel?.x)?pixel.x:Math.max(0,(main.clientWidth||1)-1);
+  }
+  plusCrosshairPinned=true;
+  store.setCrosshair({x,y,paneId:'candle_pane'});
+  $('#price-plus')?.classList.add('aligning');
+}
+function releasePlusCrosshair(){
+  if(!plusCrosshairPinned)return;
+  plusCrosshairPinned=false;
+  $('#price-plus')?.classList.remove('aligning');
+  tooltipStore()?.setCrosshair?.();
+}
+function hidePricePlus(){$('#price-plus')?.classList.add('hidden');$('#price-plus')?.classList.remove('aligning');releasePlusCrosshair();}
 function movePricePlus(event){
   const plus=$('#price-plus');
   if(!plus||!chart||chartContextMenu||currentTool||pendingDrawing){hidePricePlus();return;}
@@ -516,6 +936,7 @@ function movePricePlus(event){
   chartPointer.price=price;
   const bar=barAtClientX(Math.min(Math.max(event.clientX,box.left+1),box.right-1));
   if(Number.isFinite(bar?.timestamp))chartPointer.timestamp=bar.timestamp;
+  if(overPlus)pinPlusCrosshair(y);else{plusCrosshairPinned=false;plus.classList.remove('aligning');const localX=event.clientX-box.left;if(Number.isFinite(localX))plusCrosshairX=localX;}
 }
 function plainClone(value){try{return JSON.parse(JSON.stringify(value));}catch{return value;}}
 function snapshotOverlay(overlay){
@@ -545,7 +966,7 @@ function pasteChartClipboard(){
   drawing.points=(drawing.points||[]).map(point=>({...point,...(Number.isFinite(point.value)?{value:point.value*1.003}:{})}));
   drawing.lock=false;mutateDrawings(()=>placeOverlay(drawing));toast('已粘贴画线。');
 }
-function addPriceAlert(price){const saved=placePriceAlert(price);if(saved)setTab('alerts');return saved;}
+function addPriceAlert(price){openCreateAlert(price);}
 function userDrawingCount(){return [...drawingIds].filter(id=>id&&id!==pendingDrawing&&chart?.getOverlayById?.(id)).length;}
 function removeAllDrawings(){mutateDrawings(()=>{chart.removeOverlay({groupId:'user-drawings'});drawingIds.clear();drawingVisibility.clear();hideSelection();});}
 function removeAllIndicators(){
@@ -575,7 +996,7 @@ async function applyLatestChartTemplate(){
   const template=chartTemplates()[0];
   if(!template){toast('还没有可应用的本机模板。');return;}
   if(['normal','log','percentage'].includes(template.scale))applyChartPreferences({scale:template.scale});
-  if(['candle_solid','area','ohlc','candle_hollow'].includes(template.chartType)){state.chartType=template.chartType;if($('#chart-type'))$('#chart-type').value=state.chartType;if(chart)styleChart(chart);if(secondaryChart)styleChart(secondaryChart);}
+  if(['candle_solid','line','area','ohlc','candle_hollow'].includes(template.chartType)){state.chartType=template.chartType;if($('#chart-type'))$('#chart-type').value=state.chartType;if(chart)styleChart(chart);if(secondaryChart)styleChart(secondaryChart);}
   if(Array.isArray(template.indicators))state.indicators=template.indicators.filter(name=>supportedIndicators.includes(name));
   if(template.indicatorParams&&typeof template.indicatorParams==='object'){for(const [name,params] of Object.entries(template.indicatorParams))if(Array.isArray(params))state.indicatorParams[name]=params.map(Number);}
   syncIndicators();
@@ -595,7 +1016,7 @@ function menuItems(kind,pointerY,pointerX){
   const selected=chart?.getOverlayById(selectedDrawing),readonly=connection?.role==='reader';
   const sep=()=>({sep:true});
   const item=(id,glyph,label,action,extra={})=>({id,glyph,label,action,...extra});
-  const chartTypes=[['candle_solid','蜡烛图','candle'],['candle_hollow','空心蜡烛','candle'],['ohlc','美国线','linear'],['area','折线面积','trend']];
+  const chartTypes=[['candle_solid','蜡烛图','candle'],['candle_hollow','空心蜡烛','candle'],['ohlc','美国线','linear'],['line','折线图','trend'],['area','面积图','trend']];
   if(kind==='type')return chartTypes.map(([value,label,glyph])=>item(value,glyph,label,()=>setChartType(value),{selected:state.chartType===value}));
   if(kind==='plus'){
     const price=priceAtClientY(pointerY);
@@ -611,17 +1032,28 @@ function menuItems(kind,pointerY,pointerX){
     item('scale-percentage','percent','百分比刻度',()=>applyChartPreferences({scale:'percentage'}),{selected:chartPreferences.scale==='percentage'}),
     item('reverse','refresh',chartPreferences.reverse?'恢复价格方向':'反转价格轴',()=>applyChartPreferences({reverse:!chartPreferences.reverse})),
     sep(),
+    item('countdown','replay','当前 K 线结束倒计时',()=>applyChartPreferences({countdown:!chartPreferences.countdown}),{selected:chartPreferences.countdown}),
+    item('last-price','horizontal','最新价标记',()=>applyChartPreferences({lastPrice:!chartPreferences.lastPrice}),{selected:chartPreferences.lastPrice}),
+    item('last-price-line','horizontal','最新价线',()=>applyChartPreferences({lastPriceLine:!chartPreferences.lastPriceLine}),{selected:chartPreferences.lastPriceLine}),
+    sep(),
     item('reset-scale','fit','重置价格范围',()=>resetPriceScale(chart)),
+    item('scale-settings','settings','设置…',openChartSettings),
   ];
   if(kind==='time')return [
+    item('go-to-date','calendar','跳转到日期…',openGoToDate),
+    item('timezone','settings','时区…',openTimezoneSettings),
+    sep(),
     item('latest','play','滚动到最新',()=>chart.scrollToRealTime()),
     item('fit','fit','显示全部数据',fitChart),
     item('reset','refresh','重置图表视图',resetChartView),
   ];
   if(kind==='drawing'&&selected)return [
+    item('drawing-settings','settings',isPosition(selected.name)?'仓位参数与盈亏比':'绘图设置…',openDrawingSettings),
     item('delete','trash','删除',removeSelectedDrawing,{kbd:'Delete',disabled:readonly}),
-    item('copy','copy','复制',copySelectedDrawing,{disabled:readonly}),
-    item('lock',selected.lock?'unlock':'lock',selected.lock?'解锁':'锁定',()=>mutateDrawings(()=>chart.overrideOverlay({id:selected.id,lock:!selected.lock})),{disabled:readonly}),
+    item('copy','copy','克隆',cloneSelectedDrawing,{disabled:readonly}),
+    item('front','chevronRight','置于顶层',()=>restackSelectedDrawing('front'),{disabled:readonly}),
+    item('back','collapse','置于底层',()=>restackSelectedDrawing('back'),{disabled:readonly}),
+    item('lock',selected.lock?'unlock':'lock',selected.lock?'解锁':'锁定',()=>toggleDrawingLock(selected.id),{disabled:readonly}),
     item('hide-one','eyeOff','隐藏此图形',hideSelectedDrawing,{disabled:readonly}),
     ...(['localNote','simpleAnnotation','simpleTag'].includes(selected.name)?[item('edit','edit','编辑文字',editDrawingText,{disabled:readonly})]:[]),
     sep(),
@@ -696,7 +1128,7 @@ function openWatchMenu(x,y,symbol){
   const items=[
     {id:'open',glyph:'trend',label:'打开图表',action:()=>selectSymbol(symbol)},
     {id:'copy',glyph:'copy',label:'复制代码',action:()=>copyText(symbol)},
-    {id:'alert',glyph:'alert',label:'按最近价添加提醒',action:()=>{selectSymbol(symbol).then(()=>placePriceAlert(quote?.price));},disabled:!Number.isFinite(quote?.price)},
+    {id:'alert',glyph:'alert',label:'按最近价添加警报',action:()=>{selectSymbol(symbol).then(()=>openCreateAlert(quote?.price));},disabled:!Number.isFinite(quote?.price)},
     {id:'remove',glyph:'trash',label:'从自选移除',action:()=>{state.watchlist=state.watchlist.filter(item=>item!==symbol);renderWatchlist();scheduleSave();}},
   ];
   chartContextMenu=document.createElement('div');chartContextMenu.className='chart-context-menu';chartContextMenu.setAttribute('role','menu');
@@ -719,20 +1151,35 @@ function copyText(text){
 const intervals=['1m','5m','15m','30m','1h','4h','1d','1w'];
 function stepInterval(direction){const index=Math.max(0,intervals.indexOf(state.interval));selectInterval(intervals[(index+direction+intervals.length)%intervals.length]);}
 function zoomChart(direction){if(!chart)return;chart.setBarSpace(Math.max(1,Math.min(40,chart.getBarSpace()*(direction>0?1.15:0.87))));}
-function placePriceAlert(explicit){
+function suggestedAlertPrice(explicit){
+  const value=Number(explicit);
+  if(Number.isFinite(value)&&value>0)return value;
+  const market=Number(payload?.quote?.price??allCandles.at(-1)?.close);
+  return Number.isFinite(market)&&market>0?market:null;
+}
+function commitPriceAlert(price,message){
+  if(!canEditDrawings())return false;
+  const value=Number(price);
+  if(!Number.isFinite(value)||value<=0){toast('目标价需要是正数。');return false;}
+  state.alerts.push({id:crypto.randomUUID(),symbol:state.symbol,price:value,direction:'reach',message:String(message||'').slice(0,200),createdAt:Date.now(),firedAt:null,paused:false});
+  syncAlertLines();saveState(false);updateAlertCount();
+  toast(`已在 ${fmt(value)} 添加警报。价格达到该价时通知。`);
+  return true;
+}
+function openCreateAlert(explicit){
   if(!canEditDrawings())return;
-  const price=Number.isFinite(Number(explicit))?Number(explicit):Number(payload?.quote?.price??allCandles.at(-1)?.close);
-  if(!Number.isFinite(price)||price<=0||!allCandles.length){toast('当前没有可标注的价格。');return;}
-  const id=crypto.randomUUID();
-  state.alerts.push({id,symbol:state.symbol,price,direction:'above',createdAt:Date.now(),firedAt:null});
-  placeOverlay({name:'horizontalStraightLine',points:[{timestamp:allCandles.at(-1).timestamp,value:price}],styles:{line:{color:'#d4a94e',size:1}}});
-  placeOverlay({name:'localNote',points:[{timestamp:allCandles.at(-1).timestamp,value:price}],extendData:`提醒 ${fmt(price)}`});
-  commitDrawings();
-  const saved=saveState(false);
-  $('#alert-count').textContent=state.alerts.filter(alert=>!alert.firedAt).length;
-  if(activeTab==='alerts')renderAlerts();
-  toast(`已在 ${fmt(price)} 添加价格提醒。`);
-  return saved;
+  showAlertsWidget('list');
+  const price=suggestedAlertPrice(explicit);
+  const priceValue=Number.isFinite(price)?(price<1?price.toFixed(6):price.toFixed(2)):'';
+  openModal('创建警报',`<form id="alert-form" class="alert-create"><p class="alert-create-symbol">${esc(state.symbol)}</p><label>条件<strong>达到该价格</strong></label><label>价格<input name="price" aria-label="目标价格" type="number" step="any" min="0.00000001" value="${priceValue}" required></label><label>消息<input name="message" aria-label="提醒说明" maxlength="200" placeholder="可选"></label><p class="search-hint">最新价触达或穿过该价格时触发，不区分上穿或下穿。创建时价格已经在目标上不会立刻报警，要等价格离开后再触达。</p><div class="alert-create-actions"><button type="button" class="secondary" id="alert-create-cancel">取消</button><button class="primary">创建</button></div></form>`);
+  $('#alert-create-cancel').onclick=()=>$('#modal').close();
+  $('#alert-form').onsubmit=event=>{
+    event.preventDefault();
+    const form=new FormData(event.target);
+    if(!commitPriceAlert(form.get('price'),form.get('message')))return;
+    $('#modal').close();renderAlerts();
+  };
+  const input=$('#alert-form input[name="price"]');input?.focus();input?.select?.();
 }
 function updateSelectedStyle(){
   const overlay=chart?.getOverlayById(selectedDrawing);if(!overlay)return;
@@ -745,26 +1192,44 @@ function openModal(title,body){
   if(!$('#modal').open)$('#modal').showModal();$('#close-modal').onclick=()=>$('#modal').close();
 }
 function openSearch(){
-  const filters=[['all','全部'],['crypto','加密'],['cn','A股'],['hk','港股'],['us','美股'],['etf','ETF'],['forex','外汇'],['futures','国际期货'],['indices','指数'],['global','其他市场'],['local','本地']];
+  const filters=MARKET_FILTERS;
   openModal('查找市场与标的',`<input class="search-input" id="symbol-search" placeholder="代码、中文或英文名称，如 PANW、600900、腾讯" aria-label="搜索代码或名称" autocomplete="off"/><div class="search-markets" role="group" aria-label="按市场筛选">${filters.map(([market,label])=>`<button data-search-market="${market}" class="${market==='all'?'selected':''}" aria-pressed="${market==='all'}">${label}</button>`).join('')}</div><div class="search-summary"><span id="search-count"></span><span id="search-status" role="status"></span></div><div id="search-results" class="search-results"></div><p class="search-hint" id="search-hint">内置 ${catalog.length} 个品种，可按市场浏览。完整代码支持目录外查询，如 NASDAQ:PLTR、600900、0700.HK、OKX:SUI-USDT。</p>`);
   const input=$('#symbol-search');
-  let timer,request=0,controller,searchMarket='all',items=catalog;
+  let timer,request=0,controller,searchMarket='all',items=catalog,visibleLimit=80;
   const show=items=>{
-    const visible=items.filter(item=>searchMarket==='all'||(searchMarket==='etf'?item.type==='etf':item.market===searchMarket));
-    $('#search-count').textContent=`${visible.length} 个${searchMarket==='all'?'品种':filters.find(([key])=>key===searchMarket)[1]+'品种'}`;
-    $('#search-results').innerHTML=visible.map(item=>`<div class="search-result" data-result="${esc(item.symbol)}" role="button" tabindex="0"><div>${symbolMark(item.symbol)}<div class="search-name"><strong>${esc(item.symbol)}</strong><small>${esc(item.name)}${item.direct?' · 代码直达，待行情源验证':''}</small></div></div><span class="market-tag">${esc(marketNames[item.market]||'其他市场')}${item.exchange?` · ${esc(item.exchange)}`:''}</span><button class="add-button" data-add="${esc(item.symbol)}" title="加入自选">${state.watchlist.includes(item.symbol)?'已添加':'+ 自选'}</button></div>`).join('')||'<p class="search-hint search-empty">当前分类没有匹配结果。试试切换「全部」、完整交易代码或英文名称。</p>';
+    const visible=items.filter(item=>matchesMarket(item,searchMarket));
+    const shown=visible.slice(0,visibleLimit);
+    $('#search-count').textContent=visible.length>shown.length?`显示 ${shown.length} / ${visible.length} 个，可继续加载或搜索`:`${visible.length} 个${searchMarket==='all'?'品种':filters.find(([key])=>key===searchMarket)[1]+'品种'}`;
+    $('#search-results').innerHTML=shown.map(item=>{
+      const pair=usStockPair(item,catalog),added=state.watchlist.includes(item.symbol),bothAdded=pair.length&&pair.every(symbol=>state.watchlist.includes(symbol)),label=usStockLabel(item);
+      return `<div class="search-result" data-result="${esc(item.symbol)}" role="button" tabindex="0"><div>${symbolMark(item.symbol)}<div class="search-name"><strong>${esc(item.symbol)}</strong><small>${label?`${esc(label)} · `:''}${esc(item.name)}${item.direct?' · 代码直达，待行情源验证':''}</small></div></div><span class="market-tag">${esc(label||marketNames[item.market]||'其他市场')}${item.exchange?` · ${esc(item.exchange)}`:''}</span><span class="search-actions"><button class="add-button" data-add="${esc(item.symbol)}" aria-label="将 ${esc(item.symbol)} 加入自选" ${added?'disabled':''}>${added?'已添加':'+ 自选'}</button>${pair.length?`<button class="add-button add-pair" data-add-pair="${esc(item.symbol)}" title="将 ${esc(pair.join(' 和 '))} 一并加入自选" aria-label="将 ${esc(pair.join(' 和 '))} 一并加入自选" ${bothAdded?'disabled':''}>${bothAdded?'两种已添加':'两种一起加'}</button>`:''}</span></div>`;
+    }).join('')||'<p class="search-hint search-empty">当前分类没有匹配结果。试试切换「全部」、完整交易代码或英文名称。</p>';
+    if(visible.length>shown.length){
+      $('#search-results').insertAdjacentHTML('beforeend',`<button class="secondary search-more" id="search-show-more">显示更多（还有 ${visible.length-shown.length} 个）</button>`);
+      $('#search-show-more').onclick=()=>{const scroll=$('#search-results').scrollTop;visibleLimit+=80;show(items);$('#search-results').scrollTop=scroll;};
+    }
     activateSymbolMarks($('#search-results'));
-    $$('[data-result]').forEach(row=>{const select=()=>{selectSymbol(row.dataset.result);$('#modal').close();};row.onclick=event=>{if(!event.target.closest('[data-add]'))select();};row.onkeydown=event=>{if(event.target===row&&['Enter',' '].includes(event.key)){event.preventDefault();select();}};});
-    $$('[data-add]').forEach(button=>button.onclick=event=>{event.stopPropagation();if(!state.watchlist.includes(button.dataset.add)){if(state.watchlist.length>=150){toast('自选最多保存 150 个品种，请先移除部分自选。');return;}state.watchlist.push(button.dataset.add);button.textContent='已添加';renderWatchlist();refreshWatchlist();scheduleSave();}});
+    const add=symbols=>{
+      try{
+        const result=mergeWatchlist(state.watchlist,symbols);
+        if(!result.added.length)return;
+        state.watchlist=result.watchlist;renderWatchlist();refreshWatchlist();scheduleSave();show(items);
+        if(symbols.length>1)toast('币安美股和券商美股已一并加入自选。');
+      }catch(error){toast(error.message);}
+    };
+    $$('[data-result]').forEach(row=>{const select=()=>{selectSymbol(row.dataset.result);$('#modal').close();};row.onclick=event=>{if(!event.target.closest('.search-actions'))select();};row.onkeydown=event=>{if(event.target===row&&['Enter',' '].includes(event.key)){event.preventDefault();select();}};});
+    $$('[data-add]').forEach(button=>button.onclick=event=>{event.stopPropagation();add([button.dataset.add]);});
+    $$('[data-add-pair]').forEach(button=>button.onclick=event=>{event.stopPropagation();const item=catalog.find(row=>row.symbol===button.dataset.addPair);if(item)add(usStockPair(item,catalog));});
   };
   $$('[data-search-market]').forEach(button=>button.onclick=()=>{
-    searchMarket=button.dataset.searchMarket;
+    searchMarket=button.dataset.searchMarket;visibleLimit=80;
     $$('[data-search-market]').forEach(item=>{item.classList.toggle('selected',item===button);item.setAttribute('aria-pressed',String(item===button));});
     show(items);$('#search-results').scrollTop=0;
   });
   show(items);input.focus();
+  $('#search-hint').textContent='币安美股按官方合约目录自动同步，券商美股为股票 / ETF。同一标的有两种时，可点「两种一起加」一并加入自选。';
   input.oninput=event=>{
-    const query=event.target.value.trim(),id=++request;clearTimeout(timer);controller?.abort();
+    const query=event.target.value.trim(),id=++request;visibleLimit=80;clearTimeout(timer);controller?.abort();
     items=catalog.filter(item=>`${item.symbol} ${item.name} ${item.exchange}`.toLowerCase().includes(query.toLowerCase()));
     show(items);$('#search-results').scrollTop=0;
     $('#search-status').textContent=query?'正在查询更多品种…':'';
@@ -777,7 +1242,7 @@ function openSearch(){
         if(id!==request||$('#symbol-search')!==input)return;
         for(const item of result.results){const index=catalog.findIndex(old=>old.symbol===item.symbol);if(index<0)catalog.push(item);else if(catalog[index].direct&&!item.direct)catalog[index]=item;}
         items=result.results;show(items);
-        $('#search-hint').textContent=result.meta?.warnings?.join(' ')||'点击品种打开图表，或点击「+ 自选」加入列表。';
+        $('#search-hint').textContent=result.meta?.warnings?.join(' ')||'点击品种打开图表；「+ 自选」单独添加，「两种一起加」同时收藏币安美股和券商美股。';
       }catch(error){if(error.name!=='AbortError'&&id===request&&$('#symbol-search')===input)$('#search-hint').textContent=error.message;}
       finally{if(id===request&&$('#symbol-search')===input)$('#search-status').textContent='';}
     },300);
@@ -796,11 +1261,58 @@ function indicatorParameters(name){
 }
 
 function renderPanel(){
-  if(activeTab==='backtest')renderBacktest();else if(activeTab==='pine')renderPine();else if(activeTab==='data')renderData();else if(activeTab==='collab')renderCollaboration();else if(activeTab==='accounts')mountAccountSettings({container:$('#panel-content'),api,esc,toast,connection,isActive:()=>activeTab==='accounts',updated:async()=>{catalog=(await api('/api/catalog')).results;renderWatchlist();}});else renderAlerts();
+  if(activeTab==='backtest')renderBacktest();else if(activeTab==='pine')renderPine();else if(activeTab==='data')renderData();else if(activeTab==='collab')renderCollaboration();else if(activeTab==='accounts')mountAccountSettings({container:$('#panel-content'),api,esc,toast,connection,isActive:()=>activeTab==='accounts',updated:async()=>{catalog=(await api('/api/catalog')).results;renderWatchlist();}});
+}
+function applyResearchBody(){
+  const open=localStorage.getItem('shanhai-research-body')==='1';
+  $('#research-dock')?.classList.toggle('body-open',open);
+  $('#research-dock')?.setAttribute('data-open-tab',activeTab);
+  document.body.classList.toggle('research-body-open',open);
+  const button=$('#hide-research');
+  if(button){
+    const label=open?'收起底部面板':'展开底部面板';
+    button.title=label;button.setAttribute('aria-label',label);button.setAttribute('aria-expanded',String(open));
+  }
+}
+function setResearchBody(open){
+  localStorage.setItem('shanhai-research-body',open?'1':'0');
+  applyResearchBody();
+  requestAnimationFrame(()=>{refreshPanelLayout();chart?.resize();secondaryChart?.resize();});
 }
 function setTab(tab){
-  setModule('research',true);
-  activeTab=tab;$$('[data-tab]').forEach(button=>{button.classList.toggle('selected',button.dataset.tab===tab);button.setAttribute('aria-selected',String(button.dataset.tab===tab));});renderPanel();
+  const moduleHidden=document.body.classList.contains('research-collapsed');
+  const open=$('#research-dock')?.classList.contains('body-open')&&!moduleHidden;
+  if(tab===activeTab&&open){setResearchBody(false);return;}
+  if(moduleHidden)setModule('research',true);
+  else setResearchBody(true);
+  activeTab=tab;$$('[data-tab]').forEach(button=>{button.classList.toggle('selected',button.dataset.tab===tab);button.setAttribute('aria-selected',String(button.dataset.tab===tab));});
+  $('#research-dock')?.setAttribute('data-open-tab',tab);
+  renderPanel();
+}
+let alertPane='list';
+function updateAlertCount(){
+  const el=$('#alert-count');if(el)el.textContent=state.alerts.filter(alert=>!alert.firedAt&&!alert.paused).length;
+}
+function alertLogEntries(){
+  const cleared=Number(state.alertLogClearedAt)||0;
+  return state.alerts.filter(alert=>alert?.firedAt&&alert.firedAt>cleared);
+}
+function showAlertsWidget(pane='list'){
+  alertPane=pane==='log'?'log':'list';
+  setModule('watchlist',true);
+  $('#watchlist-panel')?.classList.add('alerts-open');
+  $('#alert-button')?.classList.add('active');
+  $('#alert-button')?.setAttribute('aria-pressed','true');
+  renderAlerts();
+}
+function hideAlertsWidget(){
+  $('#watchlist-panel')?.classList.remove('alerts-open');
+  $('#alert-button')?.classList.remove('active');
+  $('#alert-button')?.setAttribute('aria-pressed','false');
+}
+function openAlerts(){
+  if($('#watchlist-panel')?.classList.contains('alerts-open'))hideAlertsWidget();
+  else showAlertsWidget('list');
 }
 function readBacktestForm(){
   const form=$('#backtest-form');if(!form)return;const values=Object.fromEntries(new FormData(form));
@@ -832,12 +1344,12 @@ registerOverlay({name:'localSignal',totalStep:1,needDefaultPointFigure:false,nee
 }});
 function drawSignals(markers,groupId){
   chart.removeOverlay({groupId});const byTime=new Map(visibleCandles().map(bar=>[bar.timestamp,bar]));
-  for(const marker of markers.slice(-300)){const timestamp=marker.timestamp??marker.time,bar=byTime.get(timestamp);if(!bar)continue;const below=marker.position==='belowBar';chart.createOverlay({name:'localSignal',groupId,lock:true,points:[{timestamp,value:below?bar.low:bar.high}],extendData:{below,color:marker.color||(below?'#3d9b78':'#c45c6a'),text:marker.text||(below?'B':'S')}});}
+  for(const marker of markers.slice(-300)){const timestamp=marker.timestamp??marker.time,bar=byTime.get(timestamp);if(!bar)continue;const below=marker.position==='belowBar';chart.createOverlay({name:'localSignal',groupId,lock:true,points:[{timestamp,value:below?bar.low:bar.high}],extendData:{below,color:marker.color||(below?'#089981':'#f23645'),text:marker.text||(below?'B':'S')}});}
 }
 function renderPine(){
   $('#panel-content').innerHTML=`<div class="pine-layout"><div class="pine-editor-wrap"><div class="pine-actions"><select id="pine-example" aria-label="Pine 示例"><option value="">选择示例</option><option value="ema">双均线 EMA</option><option value="rsi">RSI 动量</option><option value="macd">MACD</option><option value="strategy">策略示例 · 实验</option></select><button class="quiet" id="pine-save">保存脚本</button><select id="pine-saved" aria-label="已保存脚本"><option value="">我的脚本</option>${Object.keys(state.scripts).map(name=>`<option>${esc(name)}</option>`).join('')}</select><button class="quiet" id="pine-clear">移除绘图</button><button class="primary" id="pine-run" ${allCandles.length?'':'disabled'}>运行到图表</button></div><textarea class="pine-editor" id="pine-code" aria-label="Pine Script 源代码" spellcheck="false"></textarea></div><div class="pine-output" id="pine-output"></div></div>`;
   $('#pine-code').value=state.pineCode;$('#pine-code').oninput=event=>{state.pineCode=event.target.value;scheduleSave();};
-  $('#pine-code').onkeydown=event=>{if(event.key==='Tab'){event.preventDefault();const target=event.target;target.setRangeText('    ',target.selectionStart,target.selectionEnd,'end');state.pineCode=target.value;scheduleSave();}if((event.metaKey||event.ctrlKey)&&event.key==='Enter'){event.preventDefault();runPine();}};
+  $('#pine-code').onkeydown=event=>{if(event.key==='Tab'){event.preventDefault();const target=event.target;target.setRangeText('    ',target.selectionStart,target.selectionEnd,'end');state.pineCode=target.value;scheduleSave();}if(eventMatches('pine',event,shortcutOverrides)){event.preventDefault();runPine();}};
   $('#pine-example').onchange=event=>{if(examples[event.target.value]){state.pineCode=examples[event.target.value];$('#pine-code').value=state.pineCode;scheduleSave();}};
   $('#pine-saved').onchange=event=>{if(state.scripts[event.target.value]){state.pineCode=state.scripts[event.target.value];$('#pine-code').value=state.pineCode;scheduleSave();}};
   $('#pine-save').onclick=()=>{const name=prompt('脚本名称',pineResult?.indicator?.title||'我的指标');if(!name?.trim())return;state.scripts[name.trim().slice(0,100)]=state.pineCode;saveState(false);renderPine();toast('脚本已保存到本地工作区。');};
@@ -882,36 +1394,105 @@ function renderData(){
   const meta=payload?.meta;
   $('#panel-content').innerHTML=`<div class="data-grid"><div><h3>当前数据源</h3>${meta?`<dl class="source-details"><dt>行情来源</dt><dd>${esc(meta.providerName)} · ${esc(delayLabel(meta))}</dd><dt>报价更新</dt><dd>${esc(liveMeta?.providerName||meta.providerName)} · ${esc(delayLabel(liveMeta||meta))}<br>源时间 ${esc(date(payload?.quote.timestamp))}${liveMeta?.feedType==='push'?` · 接收差 ${Math.max(0,liveMeta.receivedAt-liveMeta.sourceTime)} ms`: ' · 网页端延迟未保证'}</dd><dt>数据区间</dt><dd>${esc(date(allCandles[0]?.timestamp))}<br>${esc(date(allCandles.at(-1)?.timestamp))}</dd><dt>更新时间</dt><dd>${esc(date(meta.fetchedAt||meta.cachedAt))}</dd><dt>缓存状态</dt><dd>${esc(meta.cache==='stale'?'断网历史缓存':meta.cache==='fresh'?'本地新鲜缓存':meta.provider==='csv'?'用户导入':'在线读取后存盘')}</dd></dl>`:'<p>载入行情后显示来源、时间范围与数据限制。</p>'}<div class="data-buttons"><button class="secondary" id="csv-import-button">导入 CSV</button><button class="secondary" id="csv-export-button" ${allCandles.length?'':'disabled'}>导出 OHLCV</button><button class="quiet" id="restore-workspace">导入工作区</button></div></div><div><h3>数据与计算口径</h3><ul class="warning-list">${(meta?.warnings||['行情在线请求，下载后可使用缓存离线研究。']).map(warning=>`<li>${esc(warning)}</li>`).join('')}<li>CSV 支持中英 OHLCV 表头与毫秒/秒/ISO 时间；导入时会验证并报告错误。</li><li>加密现货使用官方推送；A股、港股、外汇使用公开报价轮询。美股、国际期货与指数须查看各源的报价时间和延迟。</li></ul>${meta?.sourceUrl?`<a href="${esc(meta.sourceUrl)}" target="_blank" rel="noreferrer" class="search-hint">查看当前数据请求 ↗</a>`:''}</div></div>`;
   $('#csv-import-button').onclick=()=>$('#csv-file').click();$('#csv-export-button').onclick=()=>download(`${state.symbol}-${state.interval}.csv`,exportCandlesCsv(allCandles),'text/csv;charset=utf-8');$('#restore-workspace').onclick=()=>$('#workspace-file').click();
+  const settings=document.createElement('section');settings.className='pyth-settings';$('#panel-content').append(settings);
+  void mountPythSettings({container:settings,api,local:connection?.local,onFree:useFreeGold,onSaved:()=>{toast('PYTH 黄金历史接口已验证。');if(state.symbol.startsWith('PYTH:'))return loadSymbol({refresh:true});}});
+}
+async function useFreeGold(symbol){
+  const result=await api('/api/feeds/gold/free',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({watchlist:state.watchlist})});
+  state.watchlist=result.watchlist;catalog=(await api('/api/catalog')).results;marketFilter='all';
+  $$('[data-market]').forEach(button=>{const selected=button.dataset.market==='all';button.classList.toggle('selected',selected);button.setAttribute('aria-pressed',String(selected));});
+  scheduleSave();renderWatchlist();$('#modal').close();
+  if(state.symbol===symbol)await loadSymbol({refresh:true});else await selectSymbol(symbol);
+  toast('免费黄金品种已加入自选，正在下载历史行情。');
+}
+function openPythSettings(){
+  openModal('黄金行情来源','<div id="pyth-settings"></div>');
+  void mountPythSettings({container:$('#pyth-settings'),api,local:connection?.local,onFree:useFreeGold,onSaved:async()=>{toast('PYTH 黄金历史接口已验证，正在载入历史行情。');$('#modal').close();if(state.symbol.startsWith('PYTH:'))await loadSymbol({refresh:true});}});
 }
 const noticeText={feishu:'已发飞书','lark-cli-user':'已通过飞书发给你','lark-cli-bot':'已通过飞书机器人发出','feishu-webhook':'已发飞书 webhook',missing_webhook:'已触发 · 飞书未发送',cli_unavailable:'已触发 · 飞书未登录',invalid_webhook:'已触发 · webhook 无效',local:'已触发'};
+const alertStatusText={active:'运行中',paused:'已暂停',fired:'已触发'};
+const ALERT_LOG_EMPTY='尚未触发任何警报！如果已触发，您将在此处看到列表。';
 function renderAlerts(){
-  $('#alert-count').textContent=state.alerts.filter(alert=>!alert.firedAt).length;
-  $('#panel-content').innerHTML=`<form id="alert-form" class="alert-form"><strong>${esc(state.symbol)}</strong><select name="direction" aria-label="提醒条件"><option value="above">价格达到或高于</option><option value="below">价格达到或低于</option></select><input name="price" aria-label="目标价格" type="number" step="any" min="0.00000001" value="${allCandles.length?(allCandles.at(-1).close*1.03).toFixed(allCandles.at(-1).close<1?6:2):''}" placeholder="目标价" required><button class="primary">创建提醒</button><span class="search-hint" id="alert-channel" style="margin:0">正在检查飞书通道…</span></form><button type="button" class="quiet" id="alert-test">发送飞书测试</button><div class="alerts-list">${state.alerts.map(alert=>`<div class="alert-row ${alert.firedAt?'fired':''}"><strong>${esc(alert.symbol)}</strong><span>${alert.direction==='above'?'≥':'≤'} <b class="number">${fmt(alert.price)}</b></span><span>${alert.firedAt?`${esc(noticeText[alert.notice]||'已触发')} ${esc(date(alert.firedAt))}`:'等待触发'}</span><button data-delete-alert="${esc(alert.id)}" aria-label="删除提醒">${icon('trash')}</button></div>`).join('')||'<p class="search-hint">在当前图表创建价格条件。行情到达后立即判断。</p>'}</div>`;
-  $('#alert-form').onsubmit=async event=>{
-    event.preventDefault();const form=new FormData(event.target);const price=Number(form.get('price'));
-    if(!Number.isFinite(price)||price<=0){toast('目标价需要是正数。');return;}
-    state.alerts.push({id:crypto.randomUUID(),symbol:state.symbol,price,direction:form.get('direction'),createdAt:Date.now(),firedAt:null});
-    const saved=await saveState(false);renderAlerts();toast(saved?'提醒已创建。行情一到就判断，不再等整分钟。':'提醒留在页面上，但还没写入主机。');
-  };
-  $$('[data-delete-alert]').forEach(button=>button.onclick=()=>{state.alerts=state.alerts.filter(alert=>alert.id!==button.dataset.deleteAlert);scheduleSave();renderAlerts();});
+  updateAlertCount();
+  const list=$('#alerts-pane-list'),log=$('#alerts-pane-log');
+  if(!list||!log)return;
+  const showLog=alertPane==='log';
+  $('#alerts-tab-list')?.setAttribute('aria-selected',String(!showLog));
+  $('#alerts-tab-log')?.setAttribute('aria-selected',String(showLog));
+  list.classList.toggle('hidden',showLog);
+  log.classList.toggle('hidden',!showLog);
+  const cards=state.alerts.map(alert=>{
+    const status=alertStatus(alert);
+    return `<article class="alert-card ${status}" data-alert-row="${esc(alert.id)}"><header><strong>${esc(alert.symbol)}</strong><span>${alertStatusText[status]}</span></header><p>达到 ${fmt(alert.price)}</p>${alert.message?`<p>${esc(alert.message)}</p>`:''}<div class="alert-actions"><button type="button" data-pause-alert="${esc(alert.id)}" ${alert.firedAt?'disabled':''}>${alert.paused?'启用':'暂停'}</button><button type="button" data-edit-alert="${esc(alert.id)}">编辑</button><button type="button" data-jump-alert="${esc(alert.id)}">定位</button><button type="button" data-delete-alert="${esc(alert.id)}">删除</button></div></article>`;
+  }).join('');
+  list.innerHTML=`<div class="alerts-toolbar"><button type="button" class="primary" id="alerts-create">创建警报</button></div>${cards||`<div class="alerts-empty">${icon('alert')}<p>当满足您的条件时，警报会立即通知您。创建警报以开始。</p><button type="button" class="primary" id="alerts-create-empty">创建警报</button></div>`}<p class="search-hint" id="alert-channel">正在检查飞书通道…</p><button type="button" class="quiet" id="alert-test">发送飞书测试</button>`;
+  const entries=alertLogEntries();
+  const logCards=entries.map(alert=>`<article class="alert-card fired"><header><strong>${esc(alert.symbol)}</strong><time>${esc(date(alert.firedAt))}</time></header><p>已达到 ${fmt(alert.price)}${Number.isFinite(alert.triggerPrice)?` · 触发价 ${fmt(alert.triggerPrice)}`:''}</p>${alert.message?`<p>${esc(alert.message)}</p>`:''}<p>${esc(noticeText[alert.notice]||'已触发')}</p></article>`).join('');
+  log.innerHTML=`<div class="alerts-toolbar"><button type="button" id="alerts-clear-log" ${entries.length?'':'disabled'}>清除日志</button></div>${logCards||`<div class="alerts-empty">${icon('alert')}<p>${ALERT_LOG_EMPTY}</p></div>`}`;
+  $('#alerts-create')?.addEventListener('click',()=>openCreateAlert());
+  $('#alerts-create-empty')?.addEventListener('click',()=>openCreateAlert());
+  $('#alerts-clear-log')?.addEventListener('click',()=>{if(!alertLogEntries().length)return;state.alertLogClearedAt=Date.now();scheduleSave();renderAlerts();});
+  $$('[data-delete-alert]').forEach(button=>button.onclick=()=>{state.alerts=state.alerts.filter(alert=>alert.id!==button.dataset.deleteAlert);syncAlertLines();scheduleSave();renderAlerts();});
+  $$('[data-pause-alert]').forEach(button=>button.onclick=()=>{const alert=state.alerts.find(item=>item.id===button.dataset.pauseAlert);if(!alert||alert.firedAt)return;alert.paused=!alert.paused;syncAlertLines();scheduleSave();renderAlerts();});
+  $$('[data-jump-alert]').forEach(button=>button.onclick=()=>jumpToAlert(button.dataset.jumpAlert));
+  $$('[data-edit-alert]').forEach(button=>button.onclick=()=>editAlertRow(button.dataset.editAlert));
   $('#alert-test').onclick=async()=>{try{const result=await api('/api/alerts/test',{method:'POST'});toast(result.sent?'飞书测试消息已发送。':'飞书测试没有发出。');}catch(error){toast(`飞书测试没有发出：${error.message}`);}};
   api('/api/alerts/channel').then(value=>{const el=$('#alert-channel');if(!el)return;el.textContent=value.label||value.missing;}).catch(error=>{const el=$('#alert-channel');if(el)el.textContent=error.message;});
+}
+function editAlertRow(id){
+  const alert=state.alerts.find(item=>item.id===id);const row=document.querySelector(`[data-alert-row="${CSS.escape(id)}"]`);if(!alert||!row)return;
+  row.innerHTML=`<form class="alert-form" id="alert-edit"><p>达到该价格</p><input name="price" aria-label="目标价格" type="number" step="any" min="0.00000001" value="${alert.price}" required><input name="message" aria-label="提醒说明" maxlength="200" value="${esc(alert.message||'')}"><button class="primary" type="submit">保存</button><button type="button" class="secondary" id="alert-edit-cancel">取消</button></form>`;
+  $('#alert-edit-cancel').onclick=()=>renderAlerts();
+  $('#alert-edit').onsubmit=event=>{
+    event.preventDefault();const form=new FormData(event.target);const price=Number(form.get('price'));
+    if(!Number.isFinite(price)||price<=0){toast('目标价需要是正数。');return;}
+    alert.price=price;alert.direction='reach';alert.message=String(form.get('message')||'').slice(0,200);
+    syncAlertLines();scheduleSave();renderAlerts();
+  };
+}
+async function jumpToAlert(id){
+  const alert=state.alerts.find(item=>item.id===id);if(!alert)return;
+  if(alert.symbol!==state.symbol)await selectSymbol(alert.symbol);
+  chart?.scrollToRealTime?.();syncAlertLines();toast(`已定位 ${alert.symbol} 的 ${fmt(alert.price)} 警报线。`);
+}
+function syncAlertLines(){
+  if(!chart)return;
+  chart.removeOverlay({groupId:'price-alerts'});
+  const timestamp=visibleCandles().at(-1)?.timestamp??allCandles.at(-1)?.timestamp;
+  if(!Number.isFinite(timestamp))return;
+  for(const alert of state.alerts){
+    if(alert.symbol!==state.symbol||alert.paused||!Number.isFinite(alert.price))continue;
+    chart.createOverlay({id:`alert-line-${alert.id}`,name:'horizontalStraightLine',groupId:'price-alerts',lock:true,points:[{timestamp,value:alert.price}],styles:{line:{color:alert.firedAt?'#8b93a7':'#2962ff',size:1,style:'dashed'}}});
+  }
 }
 function applyAlert(event){
   const incoming=event.alert;if(!incoming?.id)return;
   const alert=state.alerts.find(item=>item.id===incoming.id);if(!alert||alert.firedAt)return;
-  alert.firedAt=incoming.firedAt;alert.triggerPrice=incoming.triggerPrice;alert.notice=incoming.notice;
+  alert.firedAt=incoming.firedAt;alert.triggerPrice=incoming.triggerPrice;alert.notice=incoming.notice;alert.direction='reach';
   const channel=['feishu','lark-cli-user','lark-cli-bot','feishu-webhook'].includes(incoming.notice)?`${noticeText[incoming.notice]}。`:'飞书未发出，仅在本机提示。';
-  toast(`价格提醒：${alert.symbol} ${fmt(incoming.triggerPrice)}，已${alert.direction==='above'?'达到或高于':'达到或低于'} ${fmt(alert.price)}。${channel}`);
-  scheduleSave();if(activeTab==='alerts')renderAlerts();else $('#alert-count').textContent=state.alerts.filter(item=>!item.firedAt).length;
+  toast(`价格提醒：${alert.symbol} ${fmt(incoming.triggerPrice)}，已达到 ${fmt(alert.price)}。${channel}`);
+  scheduleSave();syncAlertLines();
+  if($('#watchlist-panel')?.classList.contains('alerts-open'))renderAlerts();else updateAlertCount();
 }
 function startReplay(){
-  if(!allCandles.length){toast('请先载入行情。');return;}if(state.dual)toggleLayout();replay=true;replayCount=Math.max(2,Math.floor(allCandles.length*.55));$('#replay-strip').classList.remove('hidden');$('#replay-button').classList.add('active');$('#replay-slider').min='2';$('#replay-slider').max=String(allCandles.length);$('#replay-slider').value=String(replayCount);$('#replay-play').innerHTML=icon('play');applyReplay();
+  if(!allCandles.length){toast('请先载入行情。');return;}if(state.dual)toggleLayout();
+  stopReplayTimer();replay=true;replaySelecting=true;replayCount=allCandles.length;
+  $('#replay-strip').classList.remove('hidden');$('#replay-button').classList.add('active');
+  $('#replay-hint').textContent='点击一根 K 线作为起点，之后的 K 线会先隐藏';
+  $('#replay-slider').min='2';$('#replay-slider').max=String(allCandles.length);$('#replay-slider').value=String(allCandles.length);
+  $('#replay-play').innerHTML=icon('play');$('#replay-time').textContent='';
+  chart?.applyNewData(allCandles,false);renderHeader();
 }
-function applyReplay(){removeComputed();const data=visibleCandles();chart.applyNewData(data,false);chart.scrollToRealTime();$('#replay-slider').value=String(replayCount);$('#replay-time').textContent=date(data.at(-1)?.timestamp);renderHeader();renderPanel();}
-function stopReplayTimer(){clearInterval(replayTimer);replayTimer=null;$('#replay-play').innerHTML=icon('play');}
-function exitReplay(render=true){if(!replay)return;stopReplayTimer();replay=false;$('#replay-strip').classList.add('hidden');$('#replay-button').classList.remove('active');if(render){removeComputed();chart.applyNewData(allCandles,false);chart.scrollToRealTime();renderHeader();renderPanel();}}
-function advanceReplay(){if(replayCount>=allCandles.length){stopReplayTimer();return;}replayCount++;applyReplay();}
+function applyReplay(){
+  if(replaySelecting)return;
+  removeComputed();const data=visibleCandles();chart.applyNewData(data,false);chart.scrollToRealTime();
+  $('#replay-slider').max=String(allCandles.length);$('#replay-slider').value=String(replayCount);
+  $('#replay-hint').textContent=`回放到第 ${replayCount} / ${allCandles.length} 根`;
+  $('#replay-time').textContent=date(data.at(-1)?.timestamp);renderHeader();renderPanel();syncAlertLines();
+}
+function stopReplayTimer(){clearInterval(replayTimer);replayTimer=null;if($('#replay-play'))$('#replay-play').innerHTML=icon('play');}
+function exitReplay(render=true){if(!replay&&!replaySelecting)return;stopReplayTimer();replay=false;replaySelecting=false;$('#replay-strip').classList.add('hidden');$('#replay-button').classList.remove('active');if(render){removeComputed();chart.applyNewData(allCandles,canLoadOlder(allCandles,{imported:Boolean(state.imports[state.symbol])}));chart.scrollToRealTime();renderHeader();renderPanel();syncAlertLines();}}
+function advanceReplay(direction=1){if(!replay||replaySelecting){toast('请先点击一根 K 线作为回放起点。');return;}const next=stepReplayCount(replayCount,allCandles.length,direction);if(next===replayCount){if(direction>0)stopReplayTimer();return;}replayCount=next;applyReplay();}
 function download(name,contents,type){const url=URL.createObjectURL(new Blob([contents],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function downloadJson(name,value){download(name,JSON.stringify(value,null,2),'application/json');}
 async function importCsv(file){
@@ -930,9 +1511,11 @@ function validateState(value){
   if(!Array.isArray(value.watchlist)||!value.watchlist.every(item=>typeof item==='string')||value.watchlist.length>150)throw new Error('自选列表无效或超过 150 个。');
   if(typeof value.pineCode!=='string'||value.pineCode.length>100000)throw new Error('工作区脚本无效或过长。');
   if(!Array.isArray(value.indicators)||!value.indicators.every(name=>supportedIndicators.includes(name)))throw new Error('工作区包含未知指标。');
-  if(!Array.isArray(value.alerts)||value.alerts.some(alert=>!alert||typeof alert.id!=='string'||typeof alert.symbol!=='string'||!['above','below'].includes(alert.direction)||!Number.isFinite(alert.price)||alert.price<=0))throw new Error('工作区提醒格式无效。');
+  if(!Array.isArray(value.alerts)||value.alerts.some(alert=>!alert||typeof alert.id!=='string'||typeof alert.symbol!=='string'||!isReachDirection(alert.direction)||!Number.isFinite(alert.price)||alert.price<=0||(alert.message!=null&&(typeof alert.message!=='string'||alert.message.length>200))||(alert.paused!=null&&typeof alert.paused!=='boolean')))throw new Error('工作区提醒格式无效。');
   for(const [symbol,item] of Object.entries(value.imports||{})){if(!symbol.startsWith('CSV:')||!Array.isArray(item.candles))throw new Error('工作区本地行情格式无效。');parseCandlesCsv(exportCandlesCsv(item.candles));}
-  return {...structuredClone(defaults),...value,theme:value.theme==='light'?'light':'dark',chartType:['candle_solid','area','ohlc','candle_hollow'].includes(value.chartType)?value.chartType:'candle_solid',secondaryInterval:['1m','5m','15m','30m','1h','4h','1d','1w'].includes(value.secondaryInterval)?value.secondaryInterval:'1h'};
+  const alerts=value.alerts.map(alert=>normalizePriceAlert(alert));
+  const alertLogClearedAt=Number.isFinite(value.alertLogClearedAt)&&value.alertLogClearedAt>=0?value.alertLogClearedAt:undefined;
+  return {...structuredClone(defaults),...value,alerts,alertLogClearedAt,theme:value.theme==='light'?'light':'dark',chartType:['candle_solid','line','area','ohlc','candle_hollow'].includes(value.chartType)?value.chartType:'candle_solid',secondaryInterval:['1m','5m','15m','30m','1h','4h','1d','1w'].includes(value.secondaryInterval)?value.secondaryInterval:'1h'};
 }
 function connectMarket(){if(!payload||!state.autoRefresh||state.imports[state.symbol]||!enabledSymbol(state.symbol)){liveFeed.close();return;}liveFeed.connect(state.symbol,state.interval,state.watchlist.filter(enabledSymbol),state.dual?state.secondaryInterval:null);}
 function paintQuoteOnLastBar(quote){
@@ -952,7 +1535,7 @@ function applyLiveEvent(event){
     }
     renderWatchlist();return;
   }
-  if(event.type==='candle'&&secondaryChart&&!replay&&event.symbol===state.symbol&&event.interval===state.secondaryInterval){const last=secondaryChart.getDataList().at(-1);if(last&&event.candle.timestamp>=last.timestamp)secondaryChart.updateData(event.candle);}
+  if(event.type==='candle'&&secondaryChart&&secondaryPayload&&!replay&&event.symbol===state.symbol&&event.interval===state.secondaryInterval){const last=secondaryChart.getDataList().at(-1);if(last&&event.candle.timestamp>=last.timestamp){secondaryChart.updateData(event.candle);secondaryPayload.meta={...secondaryPayload.meta,...event.meta,cache:event.meta.cache};renderCountdown(secondaryChart,secondaryPayload,state.secondaryInterval);}}
   if(event.type==='candle'&&payload&&!replay&&event.symbol===state.symbol&&event.interval===state.interval){
     const last=allCandles.at(-1),bar={...event.candle,sourceTime:event.meta.sourceTime};if(!last||bar.timestamp<last.timestamp)return;
     if(bar.timestamp===last.timestamp)allCandles[allCandles.length-1]=bar;else allCandles.push(bar);
@@ -1030,10 +1613,10 @@ function openResearch(){
 async function refreshCurrent(){
   const id=loadingId,symbol=state.symbol,interval=state.interval,startedAt=Date.now();
   try{
-    const value=await api(`/api/candles?${new URLSearchParams({symbol,interval,limit:800,refresh:'1'})}`);if(id!==loadingId||replay)return;
+    const value=await api(`/api/candles?${new URLSearchParams({symbol,interval,limit:String(INITIAL_BARS),refresh:'1'})}`);if(id!==loadingId||replay)return;
     const lastTime=allCandles.at(-1)?.timestamp,recent=allCandles.filter(bar=>bar.sourceTime>=startedAt),oldQuote=payload?.quote;
-    allCandles=[...new Map([...value.candles,...recent].map(bar=>[bar.timestamp,bar])).values()].sort((a,b)=>a.timestamp-b.timestamp);payload={...value,candles:allCandles,quote:oldQuote?.timestamp>value.quote.timestamp?oldQuote:value.quote};quotes.set(symbol,payload.quote);
-    if(lastTime&&allCandles.some(bar=>bar.timestamp===lastTime)){for(const bar of allCandles.filter(bar=>bar.timestamp>=lastTime))chart.updateData(bar);}else chart.applyNewData(allCandles,false);
+    allCandles=mergeRefresh(allCandles,value.candles,recent);payload={...value,candles:allCandles,quote:oldQuote?.timestamp>value.quote.timestamp?oldQuote:value.quote};quotes.set(symbol,payload.quote);
+    if(lastTime&&allCandles.some(bar=>bar.timestamp===lastTime)){for(const bar of allCandles.filter(bar=>bar.timestamp>=lastTime))chart.updateData(bar);}else chart.applyNewData(allCandles,canLoadOlder(allCandles,{imported:Boolean(state.imports[symbol])}));
     renderHeader();renderWatchlist();if(activeTab==='data')renderData();
     if(state.dual)loadSecondary({refresh:true});
   }catch(error){$('#connection-status').textContent=`更新失败：${error.message}`;}
@@ -1057,17 +1640,14 @@ async function applyImportedConfig(result){
 async function importConfigFile(file){
   try{
     if(file.size>1024*1024)throw new Error('配置文件不能超过 1 MB。');
-    await applyImportedConfig(importTradingViewConfig(await file.text(),{watchlist:state.watchlist,supportedIndicators}));
+    await applyImportedConfig(importTradingViewConfig(await file.text(),{watchlist:state.watchlist,supportedIndicators,catalog}));
   }catch(error){toast(`导入失败：${error.message}`);}
 }
 async function importLocalTradingView(){
   const button=$('#import-local-tv');button.disabled=true;
   try{
-    const found=await api('/api/tv-local');
-    const looked=found.searched?.filter(item=>item.exists).map(item=>item.path).slice(0,6).join('；')||'没有命中的目录';
-    if(!found.symbols?.length&&!found.indicators?.length){toast(`没有读到可合并的代码或指标。${(found.ignored||[]).join('、')}。查看了：${looked}`);return;}
-    const result=importTradingViewConfig(JSON.stringify({symbols:found.symbols,indicators:found.indicators}),{watchlist:state.watchlist,supportedIndicators});
-    result.ignored=[...new Set([...result.ignored,...(found.ignored||[])])];
+    const result=await api('/api/tv-local/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({watchlist:state.watchlist})});
+    catalog=(await api('/api/catalog')).results;
     await applyImportedConfig(result);
   }catch(error){toast(`导入失败：${error.message}`);}
   finally{button.disabled=false;}
@@ -1076,9 +1656,9 @@ function drawAgentMarks(annotations){
   const last=allCandles.at(-1);if(!last)throw new Error('当前没有 K 线。');
   const start=allCandles.at(-30)||allCandles[0];
   for(const item of annotations||[]){
-    if(item.kind==='range'&&Number.isFinite(item.price2))placeOverlay({name:'rect',points:[{timestamp:start.timestamp,value:item.price},{timestamp:last.timestamp,value:item.price2}],styles:{line:{color:'#d4a94e',size:1}}});
+    if(item.kind==='range'&&Number.isFinite(item.price2))placeOverlay({name:'rect',points:[{timestamp:start.timestamp,value:item.price},{timestamp:last.timestamp,value:item.price2}],styles:{line:{color:'#2962ff',size:1}}});
     else if(item.kind==='text')placeOverlay({name:'localNote',points:[{timestamp:last.timestamp,value:item.price}],extendData:item.text||'Agent'});
-    else{placeOverlay({name:'horizontalStraightLine',points:[{timestamp:last.timestamp,value:item.price}],styles:{line:{color:'#d4a94e',size:1}}});if(item.text)placeOverlay({name:'localNote',points:[{timestamp:last.timestamp,value:item.price}],extendData:item.text});}
+    else{placeOverlay({name:'horizontalStraightLine',points:[{timestamp:last.timestamp,value:item.price}],styles:{line:{color:'#2962ff',size:1}}});if(item.text)placeOverlay({name:'localNote',points:[{timestamp:last.timestamp,value:item.price}],extendData:item.text});}
   }
   commitDrawings();
 }
@@ -1108,16 +1688,125 @@ function applyLayoutChrome(){
     button.title=`${hidden[name]?'显示':'隐藏'}${label}`;button.setAttribute('aria-label',button.title);
   }
   $$('[data-module]').forEach(input=>{input.checked=!hidden[input.dataset.module];});
+  applyResearchBody();
   requestAnimationFrame(()=>{refreshPanelLayout();chart?.resize();secondaryChart?.resize();});
 }
 function setModule(name,visible){
   const key=layoutModules.find(item=>item[0]===name)?.[1];if(!key)return;
   if(name==='watchlist'&&matchMedia('(max-width:800px)').matches)document.body.classList.toggle('watchlist-mobile-open',visible);
-  localStorage.setItem(key,visible?'0':'1');applyLayoutChrome();
+  localStorage.setItem(key,visible?'0':'1');
+  if(name==='research'&&visible)localStorage.setItem('shanhai-research-body','1');
+  applyLayoutChrome();
+}
+let drawingPanelDrag=null,armingPanelDrag=false;
+function syncDrawingStyleButton(){
+  const button=$('#drawing-style-button');if(!button)return;
+  const dashed=$('#drawing-line-style')?.value==='dashed';
+  button.innerHTML=icon(dashed?'lineDashed':'lineSolid');
+  button.title=dashed?'虚线':'实线';button.setAttribute('aria-label',button.title);
+}
+function drawingPanelBox(){
+  const column=document.querySelector('.main-column'),area=$('#chart-area'),bar=$('#drawing-selection');
+  if(!column||!area||!bar)return null;
+  const pad=6,width=bar.offsetWidth||160,height=bar.offsetHeight||38;
+  const bottom=area.getBoundingClientRect().bottom-column.getBoundingClientRect().top;
+  return {minX:pad,minY:pad,maxX:Math.max(pad,column.clientWidth-width-pad),maxY:Math.max(pad,bottom-height-pad)};
+}
+function placeDrawingPanel(position){
+  const bar=$('#drawing-selection'),box=drawingPanelBox();if(!bar||!box)return;
+  const next=clampBox(position,box);
+  bar.style.left=`${next.x}px`;bar.style.top=`${next.y}px`;
+  return next;
+}
+function applyDrawingPanelPosition(){
+  if(drawingPanelDrag)return;
+  const bar=$('#drawing-selection');
+  if(!bar||bar.classList.contains('hidden'))return;
+  placeDrawingPanel(readLegendPosition(localStorage));
+}
+function moveDrawingPanel(event){
+  const bar=$('#drawing-selection');
+  if(!drawingPanelDrag||!bar||event.pointerId!==drawingPanelDrag.pointerId)return;
+  if((event.buttons&1)===0){endDrawingPanelDrag(event);return;}
+  event.preventDefault();event.stopPropagation();
+  placeDrawingPanel({x:drawingPanelDrag.left+event.clientX-drawingPanelDrag.x,y:drawingPanelDrag.top+event.clientY-drawingPanelDrag.y});
+}
+function endDrawingPanelDrag(event){
+  if(event?.type==='lostpointercapture'&&(armingPanelDrag||(event.buttons&1)))return;
+  const bar=$('#drawing-selection');
+  if(!drawingPanelDrag||(event&&event.pointerId!==drawingPanelDrag.pointerId))return;
+  const pointerId=drawingPanelDrag.pointerId;
+  drawingPanelDrag=null;
+  document.removeEventListener('pointermove',moveDrawingPanel,true);
+  document.removeEventListener('pointerup',endDrawingPanelDrag,true);
+  document.removeEventListener('pointercancel',endDrawingPanelDrag,true);
+  bar?.classList.remove('dragging');
+  if(bar)writeLegendPosition(localStorage,{x:bar.offsetLeft,y:bar.offsetTop});
+  if(pointerId!=null&&bar?.hasPointerCapture?.(pointerId))bar.releasePointerCapture(pointerId);
+}
+function closeDrawingToolbarMenus(){
+  $('#drawing-more-menu')?.classList.add('hidden');
+  $('#drawing-settings-pop')?.classList.add('hidden');
+  $('#drawing-more')?.setAttribute('aria-expanded','false');
+  $('#drawing-settings')?.setAttribute('aria-expanded','false');
+}
+function placeToolbarMenu(menu,anchor){
+  menu.classList.remove('hidden');
+  const rect=anchor.getBoundingClientRect(),width=menu.offsetWidth||160,height=menu.offsetHeight||40;
+  menu.style.left=`${Math.max(8,Math.min(rect.left,innerWidth-width-8))}px`;
+  menu.style.top=`${rect.bottom+6+height>innerHeight-8?Math.max(8,rect.top-height-6):rect.bottom+6}px`;
+}
+function openDrawingMore(){
+  const menu=$('#drawing-more-menu'),anchor=$('#drawing-more');if(!menu||!anchor)return;
+  const open=menu.classList.contains('hidden');
+  closeDrawingToolbarMenus();
+  if(open){placeToolbarMenu(menu,anchor);anchor.setAttribute('aria-expanded','true');}
+}
+function openDrawingSettings(){
+  const overlay=chart?.getOverlayById(selectedDrawing);if(!overlay)return;
+  closeDrawingToolbarMenus();closeChartMenu();
+  if(isPosition(overlay.name)){openPositionEditor(overlay.id);return;}
+  const snapshot=value=>({name:value.name,points:plainClone(value.points).map(point=>{if(Number.isFinite(point.timestamp))delete point.dataIndex;return point;}),styles:plainClone(value.styles),extendData:plainClone(value.extendData),lock:value.lock});
+  const original=snapshot(overlay),key=drawingKey();
+  openModal(`${drawingNames[overlay.name]||overlay.name} · 设置`,'<div id="drawing-editor"></div>');
+  mountDrawingEditor({container:$('#drawing-editor'),original,timezone:chartTimezone(chartPreferences.timezone,payload?.meta.timezone),readonly:connection?.role==='reader',onCancel:()=>$('#modal').close(),onSave:patch=>{
+    if(!canEditDrawings())return;
+    const current=chart.getOverlayById(overlay.id);
+    if(key!==drawingKey()||!current||JSON.stringify(snapshot(current))!==JSON.stringify(original))throw new Error('图形在编辑期间已变化，请关闭窗口并重新打开设置。');
+    mutateDrawings(()=>chart.overrideOverlay({id:current.id,...patch}));showSelection(chart.getOverlayById(current.id));$('#modal').close();toast('绘图设置已更新。');
+  }});
+}
+function mountDrawingPanelDrag(){
+  const bar=$('#drawing-selection'),column=document.querySelector('.main-column');
+  if(!bar||!column||bar.dataset.bound)return;
+  if(bar.parentElement!==column)column.prepend(bar);
+  bar.dataset.bound='1';
+  bar.addEventListener('pointerdown',event=>{
+    if(event.button!==0)return;
+    if(event.target.closest('input,select,textarea,button,.drawing-floating-menu'))return;
+    closeDrawingToolbarMenus();
+    event.preventDefault();event.stopPropagation();
+    drawingPanelDrag={pointerId:event.pointerId,x:event.clientX,y:event.clientY,left:bar.offsetLeft,top:bar.offsetTop};
+    bar.classList.add('dragging');
+    document.addEventListener('pointermove',moveDrawingPanel,true);
+    document.addEventListener('pointerup',endDrawingPanelDrag,true);
+    document.addEventListener('pointercancel',endDrawingPanelDrag,true);
+    armingPanelDrag=true;
+    try{bar.setPointerCapture(event.pointerId);}catch{}
+    armingPanelDrag=false;
+  });
+  bar.addEventListener('pointermove',moveDrawingPanel);
+  bar.addEventListener('pointerup',endDrawingPanelDrag);
+  bar.addEventListener('pointercancel',endDrawingPanelDrag);
+  bar.addEventListener('lostpointercapture',endDrawingPanelDrag);
+  $('#drawing-panel-reset').onclick=event=>{event.stopPropagation();if(drawingPanelDrag)return;localStorage.removeItem(DRAWING_PANEL_STORAGE_KEY);placeDrawingPanel({x:6,y:6});};
 }
 function attachEvents(){
+  mountDrawingPanelDrag();
   matchMedia('(max-width:800px)').addEventListener('change',()=>{document.body.classList.remove('watchlist-mobile-open');applyLayoutChrome();});
-  for(const [id,glyph] of [['indicators-button','indicators'],['alert-button','alert'],['replay-button','replay'],['research-button','book'],['collab-button','users'],['export-workspace','download'],['save-layout','save'],['chart-type-button','candle'],['module-button','panel'],['import-local-tv','download'],['import-config','file'],['fit-button','fit'],['refresh-button','refresh'],['replay-next','step'],['replay-exit','close'],['drawing-delete','trash'],['drawing-copy','copy'],['drawing-edit-text','edit'],['drawing-lock','lock']])$(`#${id}`).innerHTML=icon(glyph);
+  for(const [id,glyph] of [['indicators-button','indicators'],['replay-button','replay'],['research-button','book'],['collab-button','users'],['export-workspace','download'],['save-layout','save'],['chart-type-button','candle'],['module-button','panel'],['import-local-tv','download'],['import-config','file'],['fit-button','fit'],['refresh-button','refresh'],['replay-prev','stepBack'],['replay-next','step'],['replay-exit','close'],['drawing-delete','trash'],['drawing-edit-text','edit'],['drawing-lock','lock'],['drawing-settings','gear'],['drawing-more','more']])$(`#${id}`).innerHTML=icon(glyph);
+  const alertButton=$('#alert-button');if(alertButton)alertButton.innerHTML=`${icon('alert')}<span>警报</span>`;
+  $('#drawing-panel-drag').innerHTML=icon('grip');syncDrawingStyleButton();
   $('.picker-search').innerHTML=icon('search');
   for(const [scale,glyph] of [['normal','linear'],['log','log'],['percentage','percent']]){const button=$(`[data-price-scale="${scale}"]`);if(button)button.innerHTML=icon(glyph);}
   $('#layout-button').innerHTML=icon('layout');$('#snapshot-button').innerHTML=icon('camera');$('#add-watchlist').innerHTML=icon('plus');
@@ -1131,6 +1820,7 @@ function attachEvents(){
     plus.innerHTML=`<span id="price-plus-label" class="price-plus-label"></span><button type="button" id="price-plus-button" aria-label="在此价格添加">${icon('plus')}</button>`;
     $('#chart-area').append(plus);
     plus.addEventListener('contextmenu',event=>{event.preventDefault();event.stopPropagation();});
+    $('#price-plus-button').addEventListener('pointerenter',()=>{const y=Number(plus.dataset.clientY);if(Number.isFinite(y))pinPlusCrosshair(y);});
     $('#price-plus-button').onclick=event=>{
       event.preventDefault();event.stopPropagation();
       const y=Number(plus.dataset.clientY);
@@ -1140,6 +1830,8 @@ function attachEvents(){
     };
   }
   $('#chart-area').addEventListener('pointermove',movePricePlus);
+  $('#chart').addEventListener('mousemove',()=>{const hover=chart?.getChartStore?.().getOverlayStore().getHoverInstanceInfo();$('#chart').style.cursor=isPosition(hover?.instance?.name)?positionCursor(hover.figureKey):'';});
+  $('#chart').addEventListener('mouseleave',()=>{$('#chart').style.cursor='';});
   $('#chart-area').addEventListener('pointerleave',event=>{if(!event.relatedTarget?.closest?.('#price-plus'))hidePricePlus();});
   $('#chart-area').addEventListener('contextmenu',event=>{
     event.preventDefault();
@@ -1153,24 +1845,31 @@ function attachEvents(){
     const onTime=!onPrice&&!inCandle&&box&&event.clientY>box.bottom-24&&event.clientX<box.right-8;
     openChartMenu(event.clientX,event.clientY,onPrice?'price':onTime?'time':'chart');
   });
-  document.addEventListener('pointerdown',event=>{if(chartContextMenu&&!chartContextMenu.contains(event.target))closeChartMenu();});
+  document.addEventListener('pointerdown',event=>{if(chartContextMenu&&!chartContextMenu.contains(event.target))closeChartMenu();if(!event.target.closest?.('#drawing-more,#drawing-more-menu,#drawing-settings,#drawing-settings-pop'))closeDrawingToolbarMenus();});
   window.addEventListener('resize',closeChartMenu);
   document.addEventListener('fullscreenchange',()=>{const full=Boolean(document.fullscreenElement);$('#fullscreen-button').classList.toggle('active',full);$('#fullscreen-button').title=full?'退出全屏':'图表全屏';$('#fullscreen-button').setAttribute('aria-label',$('#fullscreen-button').title);chart?.resize();secondaryChart?.resize();});
   $('#hide-research').innerHTML=icon('collapse');$('#hide-watchlist').innerHTML=icon('collapseRight');
-  $('#hide-research').onclick=()=>{setModule('research',false);$('#toggle-research').focus();};
+  $('#hide-research').onclick=()=>setResearchBody(!$('#research-dock')?.classList.contains('body-open'));
   $('#hide-watchlist').onclick=()=>{setModule('watchlist',false);$('#toggle-watchlist').focus();};
-  $('#symbol-picker').onclick=openSearch;$('#add-watchlist').onclick=openSearch;$('#indicators-button').onclick=openIndicators;$('#alert-button').onclick=()=>setTab('alerts');$('#research-button').onclick=openResearch;$('#collab-button').onclick=()=>setTab('collab');
+  $('#symbol-picker').onclick=openSearch;$('#add-watchlist').onclick=openSearch;$('#indicators-button').onclick=openIndicators;$('#alert-button').onclick=openAlerts;
+  $('#alerts-tab-list').onclick=()=>showAlertsWidget('list');
+  $('#alerts-tab-log').onclick=()=>showAlertsWidget('log');
+  $('#alerts-show-watchlist').onclick=()=>hideAlertsWidget();$('#research-button').onclick=openResearch;$('#collab-button').onclick=()=>setTab('collab');
   $('#theme-button').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();scheduleSave();};$('#save-layout').onclick=()=>saveState();$('#export-workspace').onclick=()=>{serializeDrawings();downloadJson('山海-工作区.json',state);};
-  $('#refresh-button').onclick=async()=>{await loadSymbol({refresh:true});refreshWatchlist();};$('#auto-refresh').checked=state.autoRefresh;$('#auto-refresh').onchange=event=>{state.autoRefresh=event.target.checked;scheduleSave();};
+  $('#refresh-button').onclick=async()=>{await loadSymbol({refresh:true});refreshWatchlist();};$('#auto-refresh').checked=state.autoRefresh;$('#auto-refresh').onchange=event=>{state.autoRefresh=event.target.checked;connectMarket();renderHeader();scheduleSave();};
   $$('#periods button').forEach(button=>button.onclick=()=>selectInterval(button.dataset.interval));$$('[data-tab]').forEach(button=>button.onclick=()=>setTab(button.dataset.tab));
   $('#chart-type').value=state.chartType;$('#chart-type').onchange=event=>{state.chartType=event.target.value;styleChart(chart);if(secondaryChart)styleChart(secondaryChart);scheduleSave();};$('#layout-button').onclick=toggleLayout;
   $('#snapshot-button').onclick=()=>{if(!allCandles.length)return;const a=document.createElement('a');a.href=chart.getConvertPictureUrl(true,'png',chartColors().bg);a.download=`${state.symbol}-${state.interval}.png`;a.click();};
-  $('#replay-button').onclick=()=>replay?exitReplay():startReplay();$('#replay-exit').onclick=()=>exitReplay();$('#replay-next').onclick=advanceReplay;
-  $('#replay-play').onclick=()=>{if(replayTimer)stopReplayTimer();else{if(replayCount>=allCandles.length)replayCount=2;$('#replay-play').innerHTML=icon('pause');replayTimer=setInterval(advanceReplay,650);}};
-  $('#replay-slider').oninput=event=>{stopReplayTimer();replayCount=Number(event.target.value);applyReplay();};
-  $$('[data-market]').forEach(button=>button.onclick=()=>{marketFilter=button.dataset.market;$$('[data-market]').forEach(item=>item.classList.toggle('selected',item===button));renderWatchlist();});
+  $('#replay-button').onclick=()=>replay?exitReplay():startReplay();$('#replay-exit').onclick=()=>exitReplay();
+  $('#replay-next').onclick=()=>advanceReplay(1);$('#replay-prev').onclick=()=>advanceReplay(-1);
+  $('#replay-speed').onchange=event=>{replaySpeed=Number(event.target.value)||1;if(replayTimer){stopReplayTimer();$('#replay-play').innerHTML=icon('pause');replayTimer=setInterval(()=>advanceReplay(1),replayDelay(replaySpeed));}};
+  $('#replay-play').onclick=()=>{if(!replay||replaySelecting){toast('请先点击一根 K 线作为回放起点。');return;}if(replayTimer)stopReplayTimer();else{if(replayCount>=allCandles.length)replayCount=2;$('#replay-play').innerHTML=icon('pause');replayTimer=setInterval(()=>advanceReplay(1),replayDelay(replaySpeed));}};
+  $('#replay-slider').oninput=event=>{if(!replay)return;stopReplayTimer();const next=Math.round(Number(event.target.value));if(next<2||next>allCandles.length)return;replaySelecting=false;replayCount=next;applyReplay();};
+  $$('[data-market]').forEach(button=>button.onclick=()=>{marketFilter=button.dataset.market;$$('[data-market]').forEach(item=>{item.classList.toggle('selected',item===button);item.setAttribute('aria-pressed',String(item===button));});renderWatchlist();});
   $$('[data-range]').forEach(button=>button.onclick=()=>{const bars=visibleCandles();if(!bars.length)return;const from=button.dataset.range==='all'?0:bars.findIndex(bar=>bar.timestamp>=bars.at(-1).timestamp-Number(button.dataset.range)*86400000);const count=Math.max(5,bars.length-Math.max(0,from));chart.setBarSpace(Math.max(1,Math.min(40,($('#chart').clientWidth-65)/count)));chart.scrollToRealTime();$$('[data-range]').forEach(item=>item.classList.toggle('selected',item===button));});
   $('#fit-button').onclick=fitChart;
+  $('#timezone-label').onclick=openTimezoneSettings;
+  $('#go-to-date').innerHTML=icon('calendar');$('#go-to-date').onclick=openGoToDate;
   $('#toggle-research').onclick=()=>setModule('research',document.body.classList.contains('research-collapsed'));
   $('#toggle-watchlist').onclick=()=>setModule('watchlist',document.body.classList.contains('watchlist-collapsed'));
   $('#module-button').onclick=()=>{$('#module-menu').classList.toggle('hidden');$('#module-button').setAttribute('aria-expanded',String(!$('#module-menu').classList.contains('hidden')));};
@@ -1179,10 +1878,18 @@ function attachEvents(){
   $('#import-local-tv').onclick=()=>importLocalTradingView();
   $('#tv-import-file').onchange=event=>{const file=event.target.files?.[0];event.target.value='';if(file)importConfigFile(file);};
   $('#drawing-delete').onclick=removeSelectedDrawing;
-  $('#drawing-lock').onclick=()=>{const overlay=chart.getOverlayById(selectedDrawing);if(!overlay)return;mutateDrawings(()=>chart.overrideOverlay({id:overlay.id,lock:!overlay.lock}));showSelection(chart.getOverlayById(overlay.id)||overlay);};
-  $('#drawing-copy').onclick=copySelectedDrawing;$('#drawing-edit-text').onclick=editDrawingText;
+  $('#drawing-lock').onclick=()=>toggleDrawingLock(selectedDrawing);
+  $('#drawing-edit-text').onclick=editDrawingText;
+  $('#drawing-settings').onclick=event=>{event.stopPropagation();openDrawingSettings();};
+  $('#drawing-more').onclick=event=>{event.stopPropagation();openDrawingMore();};
+  $('#drawing-clone').onclick=()=>cloneSelectedDrawing();
+  $('#drawing-hide').onclick=()=>{closeDrawingToolbarMenus();hideSelectedDrawing();toast('已隐藏。可在图形对象管理里重新显示。');};
+  $('#drawing-front').onclick=()=>restackSelectedDrawing('front');
+  $('#drawing-back').onclick=()=>restackSelectedDrawing('back');
+  $('#position-settings-button').innerHTML=icon('settings');$('#position-settings-button').onclick=()=>openPositionEditor();
   $('#drawing-color').oninput=updateSelectedStyle;$('#drawing-width').oninput=updateSelectedStyle;
-  $('#drawing-line-style').onchange=updateSelectedStyle;
+  $('#drawing-line-style').onchange=()=>{syncDrawingStyleButton();updateSelectedStyle();};
+  $('#drawing-style-button').onclick=()=>{const select=$('#drawing-line-style');select.value=select.value==='dashed'?'solid':'dashed';select.onchange();};
   $('#agent-key').oninput=refreshAgentButton;
   $('#agent-form').onsubmit=async event=>{
     event.preventDefault();if($('#agent-run').disabled)return;
@@ -1201,10 +1908,32 @@ function attachEvents(){
   $('#csv-file').onchange=event=>importCsv(event.target.files[0]);
   $('#workspace-file').onchange=async event=>{const file=event.target.files[0];if(!file)return;try{if(file.size>4*1024*1024)throw new Error('工作区文件不能超过 4 MB。');await importWorkspace(validateState(JSON.parse(await file.text())));}catch(error){toast(`导入失败：${error.message}`);}event.target.value='';};
   $('#modal').onclick=event=>{if(event.target===$('#modal'))$('#modal').close();};
+  $('#chart').addEventListener('pointerdown',onFreehandDown,true);
+  document.addEventListener('pointermove',onFreehandMove,true);
+  document.addEventListener('pointerup',onFreehandUp,true);
+  document.addEventListener('pointercancel',onFreehandUp,true);
+  $('#chart').addEventListener('pointerdown',onShiftMeasureDown,true);
+  document.addEventListener('pointermove',onMeasurePointerMove);
+  document.addEventListener('pointerup',onShiftMeasureUp);
+  document.addEventListener('keydown',onMeasureKeyDown);
+  document.addEventListener('keyup',onMeasureKeyUp);
   document.addEventListener('keydown',event=>{
-    const action=matchShortcut(event);if(!action)return;
+    if(!rebindingId)return;
+    event.preventDefault();event.stopPropagation();
+    if(event.repeat)return;
+    if(event.key==='Escape'){rebindingId=null;openShortcuts();return;}
+    const chord=chordFromEvent(event);
+    if(!chord){if(!['Shift','Control','Alt','Meta'].includes(event.key))toast('这个按键不能用作快捷键。');return;}
+    const conflict=shortcutConflict(rebindingId,chord,shortcutOverrides);
+    if(conflict){toast(`与「${conflict.label}」冲突。`);return;}
+    const label=SHORTCUTS.find(item=>item.id===rebindingId)?.label||'快捷键';
+    saveShortcutOverride(rebindingId,chord);rebindingId=null;renderDrawingTools();openShortcuts();toast(`已把「${label}」设为 ${formatChord(chord)}。`);
+  },true);
+  $('#modal').addEventListener('close',()=>{rebindingId=null;});
+  document.addEventListener('keydown',event=>{
+    const action=matchShortcut(event,shortcutOverrides);if(!action)return;
     if($('#modal').open&&action!=='save'&&action!=='escape')return;
-    const tools={trend:'segment',horizontal:'horizontalStraightLine',vertical:'verticalStraightLine',cross:'crossLine',fib:'fibonacciLine',rect:'rect',note:'localNote',ruler:'datePriceRange',ray:'rayLine',extended:'straightLine','horizontal-ray':'horizontalRayLine','horizontal-segment':'horizontalSegment',channel:'parallelStraightLine','price-channel':'priceChannelLine','fib-extension':'fibExtension',circle:'localCircle',triangle:'localTriangle',arrow:'arrowLine','price-line':'priceLine','price-tag':'simpleTag','price-range':'priceRange','date-range':'dateRange'};
+    const tools={trend:'segment',horizontal:'horizontalStraightLine',vertical:'verticalStraightLine',cross:'crossLine',fib:'fibonacciLine',rect:'rect',note:'localNote',ray:'rayLine',extended:'straightLine','horizontal-ray':'horizontalRayLine','horizontal-segment':'horizontalSegment',channel:'parallelStraightLine','price-channel':'priceChannelLine','fib-extension':'fibExtension',circle:'localCircle',triangle:'localTriangle',arrow:'arrowLine','price-line':'priceLine','price-tag':'simpleTag','price-range':'priceRange','date-range':'dateRange'};
     if(action==='save'){event.preventDefault();saveState();return;}
     if(action==='escape'){if($('#modal').open)$('#modal').close();closeChartMenu();cancelDrawing();hideSelection();return;}
     event.preventDefault();
@@ -1213,7 +1942,7 @@ function attachEvents(){
     else if(action==='delete'&&selectedDrawing)removeSelectedDrawing();
     else if(tools[action])beginDrawing(tools[action]);
     else if(action==='hide')toggleDrawingVisibility();
-    else if(action==='lock')mutateDrawings(()=>chart.overrideOverlay({groupId:'user-drawings',lock:!drawingsLocked}));
+    else if(action==='lock')toggleAllDrawingLocks();
     else if(action==='indicators')openIndicators();
     else if(action==='fit')fitChart();
     else if(action==='reset')resetChartView();
@@ -1226,21 +1955,23 @@ function attachEvents(){
     else if(action==='zoom-out')zoomChart(-1);
     else if(action==='interval-prev')stepInterval(-1);
     else if(action==='interval-next')stepInterval(1);
+    else if(action==='pine')runPine();
   });
   setInterval(()=>{if(!state.autoRefresh||replay||autoBusy||document.hidden||state.imports[state.symbol])return;autoBusy=true;refreshCurrent().then(()=>refreshWatchlist()).finally(()=>{autoBusy=false;});},60_000);
   setInterval(()=>{if(state.autoRefresh&&!replay&&!autoBusy&&!document.hidden&&payload?.meta.provider==='sina'){autoBusy=true;refreshCurrent().finally(()=>{autoBusy=false;});}},10000);
-  setInterval(()=>{if(payload&&!replay)renderHeader();},1000);
+  setInterval(()=>{if(payload&&!replay)renderHeader();else renderChartTime();},1000);
   const tick=()=>{$('#clock').textContent=new Date().toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'})+' UTC+8';};tick();setInterval(tick,1000);
 }
 async function boot(){
   try{
-    connection=await api('/api/connection');$('[data-tab="accounts"]').classList.toggle('hidden',!connection.features?.domesticFutures);const [hostSaved,list,snapshot]=await Promise.all([api('/api/state'),api('/api/catalog'),api('/api/chart?room=main')]);let saved=hostSaved;if(!connection.local)try{saved=JSON.parse(localStorage.getItem('shanhai-workspace')||'{}');}catch{}if(saved.schemaVersion)try{state=validateState(saved);}catch(error){toast(`保存的工作区有异常，已使用默认布局：${error.message}`);}Object.assign(state,structuredClone(snapshot.state));catalog=list.results;
+    connection=await api('/api/connection');$('[data-tab="accounts"]').classList.toggle('hidden',!connection.features?.domesticFutures);const [hostSaved,list,snapshot]=await Promise.all([api('/api/state'),api('/api/catalog'),api('/api/chart?room=main')]);let saved=hostSaved;if(!connection.local)try{saved=JSON.parse(localStorage.getItem('shanhai-workspace')||'{}');}catch{}if(saved.schemaVersion)try{state=validateState(saved);}catch(error){toast(`保存的工作区有异常，已使用默认布局：${error.message}`);}Object.assign(state,structuredClone(snapshot.state));if(Array.isArray(state.alerts))state.alerts=state.alerts.map(alert=>normalizePriceAlert(alert));catalog=list.results;
     for(const [symbol,value] of Object.entries(state.imports))catalog.push({symbol,name:value.meta?.name||symbol,market:'local',exchange:'LOCAL'});
     const dual=state.dual;state.dual=false;applyLayoutChrome();applyTheme();setupChart();renderDrawingTools();attachEvents();refreshPanelLayout=initPanelLayout();renderWatchlist();renderPanel();await loadAgentStatus();await loadSymbol();if(dual)toggleLayout();
     collaboration=new ChartCollaboration({api,capture:()=>{serializeDrawings();return state;},apply:applySharedChart,changed:collaborationChanged,actor,canEdit:connection.role!=='reader'});
     let draft;try{draft=JSON.parse(localStorage.getItem('shanhai-chart-draft')||'null');}catch{}
     collaboration.start(snapshot);if(connection.role!=='reader'&&draft?.base?.state&&draft?.local){const merged=mergeChartStates(draft.base.state,draft.local,snapshot.state);collaboration.conflicts=[...new Set([...(draft.conflicts||[]),...merged.conflicts])];applySharedChart(merged.state);collaborationChanged(collaboration);collaboration.schedule();}
     refreshWatchlist();
+    if(['pyth','gold'].includes(new URLSearchParams(location.search).get('settings')))openPythSettings();
   }catch(error){if(error.status===401){showLogin();return;}$('#chart-message').classList.remove('hidden');$('#chart-message').textContent=`启动失败：${error.message}。请确认本地服务正在运行。`;console.error(error);}
 }
 boot();

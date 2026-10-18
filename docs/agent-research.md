@@ -43,7 +43,7 @@ CSV 仍由当前浏览器的 Pine/回测页处理，不会自动发给其他电�
 
 指标使用当前编辑器相同的 PineTS 0.11.1 引擎；仍属于实验兼容，不能保证与 TradingView 逐项相同。返回 `series[].latest` 和 `points`，指标尚未完成预热时值为 `null`，不会填造数值。
 
-每次最多 8 项指标，周期参数 1–500，历史条数 2–1000；`tail` 仅限制返回的末尾点数，计算始终使用本次完整有效样本。默认排除未确认的末根。只有主动指定 `closedOnly:false` 才允许含未收盘数据，并返回相应警告。
+每次最多 8 项指标，周期参数 1–500，单次历史 2–5000 根。更早的公开 K 线用 `before` 继续取，直到该源没有更早数据；本机补齐只写在本地缓存。`tail` 仅限制返回的末尾点数，计算始终使用本次完整有效样本。默认排除未确认的末根。只有主动指定 `closedOnly:false` 才允许含未收盘数据，并返回相应警告。
 
 ## Agent 基础回测工具
 
@@ -79,6 +79,8 @@ CSV 仍由当前浏览器的 Pine/回测页处理，不会自动发给其他电�
 `cache:stale` 会明确保留并警告，计算不会把旧数据标成实时数据。SHA256 用来对照是否用了相同的 OHLCV 样本，结果 JSON 不是完整历史行情归档。
 
 计算本身不改图。Agent 需要共享结论时，先调用 `terminal_get_chart` 取得当前 `revision`，再用编辑凭据调用 `terminal_apply_chart_operations`，携带该 `baseRevision`、唯一 `batchId` 和 `upsert_note`。批注应带结果的标的、周期、样本范围、来源与时间，可用 `data.to` 和 `data.lastClose` 锚定。遇到版本冲突，重新读取并合并；不要强制覆盖别人的修改。
+
+Agent 也可读写 `longPosition` / `shortPosition` 仓位计划。`points` 必须依次包含入场、止损、止盈三个锚点；`extendData` 是带数字与布尔值的仓位参数对象，不能用文字替代。支持资金、风险口径、数量模式、步长、乘数、杠杆、费用、滑点与显示参数，具体字段见 MCP 工具 schema 和 [仓位计算口径](position-planning-and-audit.md)。服务端再次校验价格方向与参数范围。写入仓位图形不会发送交易订单。
 
 ## 无需安装依赖的 Node 示例
 

@@ -5,6 +5,7 @@ import https from 'node:https';
 import tls from 'node:tls';
 import WebSocket from 'ws';
 import { MarketDataError } from './market-data.mjs';
+import { PAGE_GAP_MS, sleep } from './candle-pages.mjs';
 
 const TIMEOUT_MS = 12_000;
 const OKX_REST = 'https://www.okx.com';
@@ -100,34 +101,90 @@ async function fetchJson(url, provider) {
   return response.json();
 }
 
-/** OKX REST candles come newest-first; `after` paginates toward older bars (exclusive by bar timestamp). */
-async function fetchOkxCandles({ symbol, interval, limit }) {
+const OKX_RECENT_PAGE = 300;
+const OKX_HISTORY_PAGE = 100;
+
+async function okxBatch({ instId, bar, after, history }) {
+  const pageLimit = history ? OKX_HISTORY_PAGE : OKX_RECENT_PAGE;
+  const params = new URLSearchParams({ instId, bar, limit: String(pageLimit) });
+  if (after) params.set('after', after);
+  const sourceUrl = `${OKX_REST}/api/v5/market/${history ? 'history-candles' : 'candles'}?${params}`;
+  const payload = await fetchJson(sourceUrl, 'OKX');
+  if (Number(payload?.code) !== 0) {
+    throw new MarketDataError(payload?.msg || 'OKX 未返回有效数据。', 'INVALID_UPSTREAM_RESPONSE', 502,
+      { provider: 'okx', sourceUrl, upstreamCode: payload?.code });
+  }
+  const batch = Array.isArray(payload.data) ? payload.data : [];
+  return { batch, pageLimit, sourceUrl };
+}
+
+function okxRows(batch, bar) {
+  return batch.map(row => ({
+    timestamp: Number(row[0]), open: row[1], high: row[2], low: row[3], close: row[4],
+    volume: row[5], closeTime: Number(row[0]) + barCloseMs(bar) - 1, closed: row[8] === '1',
+  }));
+}
+
+/** One public OKX page. Recent candles first; an empty recent page continues into history-candles. */
+export async function fetchOkxPage({ symbol, interval, before }) {
+  const instId = okxInstId(symbol);
+  const bar = OKX_BAR[interval];
+  if (!instId || !bar) throw new MarketDataError('OKX 不支持该周期。', 'UNSUPPORTED_INTERVAL', 422, { provider: 'okx' });
+  const after = before != null ? String(before) : '';
+  let loaded = await okxBatch({ instId, bar, after, history: false });
+  let history = false;
+  if (!loaded.batch.length) {
+    loaded = await okxBatch({ instId, bar, after, history: true });
+    history = true;
+  }
+  const candles = okxRows(loaded.batch, bar).map(normalizeCloseBand).filter(Boolean)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  const exhausted = history ? candles.length < OKX_HISTORY_PAGE : false;
+  return { candles, exhausted, meta: { provider: 'okx', sourceUrl: loaded.sourceUrl, exhausted } };
+}
+
+/** OKX REST candles come newest-first; `after` paginates toward older bars. Recent candles stop near 1440, then history-candles continues until the source does. */
+async function fetchOkxCandles({ symbol, interval, limit, before }) {
   const instId = okxInstId(symbol);
   const bar = OKX_BAR[interval];
   if (!instId || !bar) throw new MarketDataError('OKX 不支持该周期。', 'UNSUPPORTED_INTERVAL', 422, { provider: 'okx' });
   const warnings = ['OKX 现货公共 K 线；最后一根 K 线可能仍在形成。'];
   const rows = [];
-  let after = '';
+  let after = before != null ? String(before) : '';
+  let history = false;
+  let exhausted = false;
+  const seen = new Set();
   while (rows.length < limit) {
-    const params = new URLSearchParams({ instId, bar, limit: '300' });
-    if (after) params.set('after', String(after));
-    const sourceUrl = `${OKX_REST}/api/v5/market/candles?${params}`;
-    const payload = await fetchJson(sourceUrl, 'OKX');
-    if (Number(payload?.code) !== 0) {
-      throw new MarketDataError(payload?.msg || 'OKX 未返回有效数据。', 'INVALID_UPSTREAM_RESPONSE', 502,
-        { provider: 'okx', sourceUrl, upstreamCode: payload?.code });
+    const cursor = `${history}:${after}`;
+    if (seen.has(cursor)) {
+      if (!history) { history = true; continue; }
+      exhausted = true;
+      break;
     }
-    const batch = Array.isArray(payload.data) ? payload.data : [];
-    if (!batch.length) break;
-    for (const row of batch) {
-      rows.push({
-        timestamp: Number(row[0]), open: row[1], high: row[2], low: row[3], close: row[4],
-        volume: row[5], closeTime: Number(row[0]) + barCloseMs(bar) - 1, closed: row[8] === '1',
-      });
+    seen.add(cursor);
+    const { batch, pageLimit } = await okxBatch({ instId, bar, after, history });
+    if (!batch.length) {
+      if (!history) { history = true; await sleep(PAGE_GAP_MS); continue; }
+      exhausted = true;
+      break;
     }
-    after = batch.at(-1)[0];
-    if (batch.length < 300) break;
+    rows.push(...okxRows(batch, bar));
+    const nextAfter = String(batch.at(-1)[0]);
+    if (nextAfter === after) {
+      if (!history) { history = true; await sleep(PAGE_GAP_MS); continue; }
+      exhausted = true;
+      break;
+    }
+    after = nextAfter;
+    if (rows.length >= limit) break;
+    if (batch.length < pageLimit) {
+      if (!history) { history = true; await sleep(PAGE_GAP_MS); continue; }
+      exhausted = true;
+      break;
+    }
+    await sleep(PAGE_GAP_MS);
   }
+  if (exhausted && rows.length < limit) warnings.push('OKX 公开 K 线已到该源更早数据的尽头。');
   if (!rows.length) throw new MarketDataError('OKX 未返回有效 K 线。', 'NO_DATA', 404, { provider: 'okx' });
   const ticker = await fetchOkxTicker({ instId });
   const bands = rows.map(normalizeCloseBand).filter(Boolean);
@@ -139,7 +196,7 @@ async function fetchOkxCandles({ symbol, interval, limit }) {
       provider: 'okx', providerName: 'OKX', sourceUrl: `${OKX_REST}/api/v5/market/candles`, exchange: 'OKX',
       currency: instId.split('-')[1] || 'USDT', name: symbol, timezone: 'UTC', delayMinutes: 0, feedType: 'snapshot',
       priceBasis: 'spot', fetchedAt: Date.now(), lastCandleTime: sorted.at(-1).timestamp, requestedLimit: limit,
-      returnedCount: sorted.length, warnings,
+      returnedCount: sorted.length, exhausted, warnings,
     },
   };
 }
@@ -215,27 +272,74 @@ function makeQuote(row, { symbol, provider, providerName, sourceUrl, volumeKey }
   };
 }
 
+const KRAKEN_PAGE = 720;
+
 export { fetchOkxCandles, fetchKrakenCandles };
-async function fetchKrakenCandles({ symbol, interval, limit }) {
+
+export async function fetchKrakenPage({ symbol, interval, before }) {
   const pair = krakenPair(symbol);
   const minutes = KRAKEN_MINUTES[interval];
   if (!pair || !minutes) throw new MarketDataError('Kraken 不支持该周期。', 'UNSUPPORTED_INTERVAL', 422, { provider: 'kraken' });
-  const sourceUrl = `${KRAKEN_REST}/0/public/OHLC?${new URLSearchParams({ pair, interval: String(minutes) })}`;
+  const params = new URLSearchParams({ pair, interval: String(minutes) });
+  if (before != null) params.set('since', String(Math.floor(before / 1000) - KRAKEN_PAGE * minutes * 60));
+  const sourceUrl = `${KRAKEN_REST}/0/public/OHLC?${params}`;
   const payload = await fetchJson(sourceUrl, 'Kraken');
   if (payload?.error?.length) {
     throw new MarketDataError(`Kraken 拒绝了请求：${payload.error.join('; ')}`, 'INVALID_UPSTREAM_RESPONSE', 502, { provider: 'kraken', sourceUrl, upstreamError: payload.error });
   }
-  const result = payload?.result || {};
-  const series = Object.entries(result).find(([key, value]) => key !== 'last' && Array.isArray(value))?.[1];
-  if (!Array.isArray(series) || !series.length) {
-    throw new MarketDataError('Kraken 未返回有效 K 线。', 'NO_DATA', 404, { provider: 'kraken', sourceUrl });
-  }
-  const rows = series.map(row => ({
+  const series = Object.entries(payload?.result || {}).find(([key, value]) => key !== 'last' && Array.isArray(value))?.[1] || [];
+  const candles = series.map(row => normalizeCloseBand({
     timestamp: Number(row[0]) * 1000, open: row[1], high: row[2], low: row[3], close: row[4],
     volume: row[6], closeTime: Number(row[0]) * 1000 + minutes * 60_000 - 1, closed: true,
-  }));
-  const candles = rows.map(normalizeCloseBand).filter(Boolean)
-    .sort((a, b) => a.timestamp - b.timestamp).slice(-limit);
+  })).filter(Boolean).filter(candle => before == null || candle.timestamp < before)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  return { candles, exhausted: series.length < KRAKEN_PAGE || candles.length === 0, meta: { provider: 'kraken', sourceUrl, exhausted: series.length < KRAKEN_PAGE } };
+}
+
+async function fetchKrakenCandles({ symbol, interval, limit, before }) {
+  const pair = krakenPair(symbol);
+  const minutes = KRAKEN_MINUTES[interval];
+  if (!pair || !minutes) throw new MarketDataError('Kraken 不支持该周期。', 'UNSUPPORTED_INTERVAL', 422, { provider: 'kraken' });
+  const sourceUrl = `${KRAKEN_REST}/0/public/OHLC?${new URLSearchParams({ pair, interval: String(minutes) })}`;
+  const warnings = ['Kraken 现货公共 K 线；官方日线/分钟线均为已收盘序列。'];
+  const byTime = new Map();
+  let since = null;
+  let exhausted = false;
+  const seen = new Set();
+  while (byTime.size < limit) {
+    const cursor = since ?? 'latest';
+    if (seen.has(cursor)) { exhausted = true; break; }
+    seen.add(cursor);
+    const params = new URLSearchParams({ pair, interval: String(minutes) });
+    if (since != null) params.set('since', String(since));
+    const pageUrl = `${KRAKEN_REST}/0/public/OHLC?${params}`;
+    const payload = await fetchJson(pageUrl, 'Kraken');
+    if (payload?.error?.length) {
+      throw new MarketDataError(`Kraken 拒绝了请求：${payload.error.join('; ')}`, 'INVALID_UPSTREAM_RESPONSE', 502, { provider: 'kraken', sourceUrl: pageUrl, upstreamError: payload.error });
+    }
+    const result = payload?.result || {};
+    const series = Object.entries(result).find(([key, value]) => key !== 'last' && Array.isArray(value))?.[1];
+    if (!Array.isArray(series) || !series.length) { exhausted = true; break; }
+    let oldest = Infinity;
+    for (const row of series) {
+      const candle = normalizeCloseBand({
+        timestamp: Number(row[0]) * 1000, open: row[1], high: row[2], low: row[3], close: row[4],
+        volume: row[6], closeTime: Number(row[0]) * 1000 + minutes * 60_000 - 1, closed: true,
+      });
+      if (!candle) continue;
+      if (candle.timestamp < oldest) oldest = candle.timestamp;
+      if (before != null && candle.timestamp >= before) continue;
+      if (!byTime.has(candle.timestamp)) byTime.set(candle.timestamp, candle);
+    }
+    if (series.length < KRAKEN_PAGE || !Number.isFinite(oldest)) { exhausted = true; break; }
+    const nextSince = Math.floor(oldest / 1000) - KRAKEN_PAGE * minutes * 60;
+    if (since != null && nextSince >= since) { exhausted = true; break; }
+    since = nextSince;
+    if (byTime.size >= limit) break;
+    await sleep(PAGE_GAP_MS);
+  }
+  const candles = [...byTime.values()].sort((a, b) => a.timestamp - b.timestamp).slice(-limit);
+  if (exhausted && candles.length < limit) warnings.push('Kraken 公共 OHLC 已到该源更早数据的尽头。');
   if (!candles.length) throw new MarketDataError('Kraken 未返回有效 K 线。', 'NO_DATA', 404, { provider: 'kraken', sourceUrl });
   const ticker = await fetchKrakenTicker({ pair });
   const last = candles.at(-1);
@@ -247,7 +351,7 @@ async function fetchKrakenCandles({ symbol, interval, limit }) {
       currency: (krakenWsSymbol(symbol) || '').split('/').pop() || 'USD', name: symbol, timezone: 'UTC',
       delayMinutes: 0, feedType: 'snapshot', priceBasis: 'spot', fetchedAt: Date.now(),
       lastCandleTime: last.timestamp, requestedLimit: limit, returnedCount: candles.length,
-      warnings: ['Kraken 现货公共 K 线；官方日线/分钟线均为已收盘序列。'],
+      exhausted, warnings,
     },
   };
 }

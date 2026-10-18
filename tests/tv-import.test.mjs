@@ -39,11 +39,11 @@ test('crypto and stock marks stay short and local', () => {
   assert.equal(symbolLetters('AAPL'), 'A');
   assert.equal(symbolLetters('UNKNOWN'), 'U');
   assert.match(symbolMark('BTCUSDT'), /\/src\/assets\/logos\/btc\.svg/);
-  assert.match(symbolMark('AAPL'), /\/src\/assets\/logos\/aapl\.png/);
+  assert.match(symbolMark('AAPL'), /\/src\/assets\/logos\/tv-[a-z0-9]+\.svg/);
   assert.doesNotMatch(symbolMark('BTCUSDT'), /https?:/);
   assert.doesNotMatch(symbolMark('NOICON'), /<img/);
-  assert.doesNotMatch(symbolMark('PEPEUSDT'), /<img/);
-  assert.match(symbolMark('NOICON'), /<text[^>]*>N<\/text>/);
+  assert.match(symbolMark('PEPEUSDT'), /<img/);
+  assert.match(symbolMark('NOICON'), /<text[^>]*>NO<\/text>/);
   const removed = [];
   const img = { complete: true, naturalWidth: 0, remove() { removed.push(this); }, addEventListener() {} };
   activateSymbolMarks({ querySelectorAll: () => [img] });

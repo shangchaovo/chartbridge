@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { decodeOkxFrame, decodeKrakenFrame, krakenPair, okxInstId, okxSymbol, krakenWsSymbol } from '../server/exchange-feeds.mjs';
@@ -106,6 +106,59 @@ test('PushSession 增量订阅 OKX tickers 频道，取消需求即断开', () =
   }finally{session.close();}
 });
 
+
+test('OKX continues into history candles after the recent page runs short', async () => {
+  const urls = [];
+  const bar = ts => [String(ts), '1', '2', '0.5', '1.5', '3', '3', '0', '1'];
+  mock.method(globalThis, 'fetch', async url => {
+    urls.push(url);
+    if (url.includes('/ticker')) {
+      return new Response(JSON.stringify({ code: '0', data: [{ instId: 'BTC-USDT', last: '10', open24h: '9', ts: '1700000000000' }] }), { status: 200 });
+    }
+    const parsed = new URL(url);
+    const history = url.includes('history-candles');
+    const after = parsed.searchParams.get('after');
+    const count = history ? 80 : (after ? 40 : 300);
+    const newest = after ? Number(after) - 86_400_000 : 1_700_000_000_000;
+    const data = Array.from({ length: count }, (_, index) => bar(newest - index * 86_400_000));
+    return new Response(JSON.stringify({ code: '0', data }), { status: 200 });
+  });
+  try {
+    const result = await fetchCandles({ symbol: 'OKX:BTC-USDT', interval: '1d', limit: 400 });
+    assert.equal(urls.filter(url => url.includes('/market/candles?')).length, 2);
+    assert.equal(urls.filter(url => url.includes('/market/history-candles?')).length, 1);
+    assert.equal(result.candles.length, 400);
+    assert.ok(result.candles[0].timestamp < result.candles.at(-1).timestamp);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test('Kraken OHLC requests an older page when the newest page is full', async () => {
+  const urls = [];
+  const day = 86_400;
+  const row = sec => [sec, '1', '2', '0.5', '1.5', '1', '3', 1];
+  mock.method(globalThis, 'fetch', async url => {
+    urls.push(url);
+    if (url.includes('/Ticker')) {
+      return new Response(JSON.stringify({ error: [], result: { XXBTZUSD: { c: ['10'], o: '9' } } }), { status: 200 });
+    }
+    const since = new URL(url).searchParams.get('since');
+    const start = since ? Number(since) + day : 1_600_000_000;
+    const count = since ? 200 : 720;
+    const data = Array.from({ length: count }, (_, index) => row(start + index * day));
+    return new Response(JSON.stringify({ error: [], result: { XXBTZUSD: data, last: data.at(-1)[0] } }), { status: 200 });
+  });
+  try {
+    const result = await fetchCandles({ symbol: 'KRAKEN:BTC/USD', interval: '1d', limit: 800 });
+    const pages = urls.filter(url => url.includes('/OHLC'));
+    assert.equal(pages.length, 2);
+    assert.match(pages[1], /since=/);
+    assert.equal(result.candles.length, 800);
+  } finally {
+    mock.restoreAll();
+  }
+});
 
 import { parseSinaQuotes, easternOffsetMinutes, parseUsMarkerTimestamp, sinaCode } from '../server/public-feeds.mjs';
 

@@ -3,6 +3,8 @@ import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { chartStateFromWorkspace, CHART_FIELDS } from '../src/collab-state.js';
 import { SAVED_DRAWING_TYPES } from '../src/drawing-catalog.js';
+import { isFreehand, MAX_FREEHAND_POINTS } from '../src/freehand.js';
+import { isPosition, positionSettings, positionLevels, calculatePosition } from '../src/position-risk.js';
 
 const intervals=new Set(['1m','5m','15m','30m','1h','4h','1d','1w']);
 const overlays=new Set(SAVED_DRAWING_TYPES);
@@ -19,7 +21,7 @@ function checkField(field,value){
   if(!CHART_FIELDS.includes(field))fail('不能修改该工作区字段。');
   if(field==='symbol')symbol(value);
   if(field==='interval'&&!intervals.has(value))fail('K线周期无效。');
-  if(field==='chartType'&&!['candle_solid','area','ohlc','candle_hollow'].includes(value))fail('图表类型无效。');
+  if(field==='chartType'&&!['candle_solid','line','area','ohlc','candle_hollow'].includes(value))fail('图表类型无效。');
   if(field==='indicators'&&(!Array.isArray(value)||value.length>12||value.some(v=>typeof v!=='string'||!/^[A-Z0-9_]{1,20}$/.test(v))))fail('技术指标列表无效，最多 12 项。');
   if(field==='indicatorParams'){
     if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length>50)fail('指标参数无效。');
@@ -30,12 +32,16 @@ function checkField(field,value){
 function drawingKey(value){if(typeof value!=='string'||value.length>100)fail('画线的行情与周期无效。');const split=value.lastIndexOf('|');symbol(value.slice(0,split));if(split<1||!intervals.has(value.slice(split+1)))fail('画线的行情与周期无效。');return value;}
 function validateDrawing(value){
   if(!value||typeof value!=='object'||!overlays.has(value.name))fail('不支持该画线类型。');id(value.id,'画线 ID');
-  if(!Array.isArray(value.points)||!value.points.length||value.points.length>12)fail('画线锚点无效。');
+  if(!Array.isArray(value.points)||!value.points.length||value.points.length>(isFreehand(value.name)?MAX_FREEHAND_POINTS:12))fail('画线锚点无效。');
   for(const p of value.points)if(!p||!finite(p.value)||(!finite(p.timestamp)&&!Number.isInteger(p.dataIndex)))fail('画线需要价格和时间或数据索引锚点。');
-  if(value.extendData!==undefined&&(typeof value.extendData!=='string'||value.extendData.length>1000))fail('画线标注文字无效。');
+  for(const p of value.points)if(p.xOffset!==undefined&&(!isFreehand(value.name)||!finite(p.xOffset)||Math.abs(p.xOffset)>1))fail('画笔的横向偏移无效。');
+  if(isPosition(value.name)){
+    try{if(value.points.length!==3)throw new Error('仓位规划需要入场、止损、止盈三个锚点。');positionSettings(value.extendData||{});calculatePosition({direction:value.name==='longPosition'?'long':'short',...positionLevels(value.points),settings:value.extendData||{}});}catch(error){fail(error.message);}
+  }else if(value.extendData!==undefined&&(typeof value.extendData!=='string'||value.extendData.length>1000))fail('画线标注文字无效。');
   if(value.visible!==undefined&&typeof value.visible!=='boolean')fail('画线显示状态无效。');
+  if(value.zLevel!==undefined&&!finite(value.zLevel))fail('画线层级无效。');
   if(value.styles!==undefined&&value.styles!==null&&(typeof value.styles!=='object'||JSON.stringify(value.styles).length>8000))fail('画线样式无效。');
-  safeJson(value);return {id:value.id,name:value.name,points:value.points.map(p=>({...p})),...(value.styles!==undefined?{styles:value.styles}:{}),...(value.extendData!==undefined?{extendData:value.extendData}:{}),...(value.visible!==undefined?{visible:value.visible}:{}),lock:Boolean(value.lock)};
+  safeJson(value);return {id:value.id,name:value.name,points:value.points.map(p=>({...p})),...(value.styles!==undefined?{styles:value.styles}:{}),...(value.extendData!==undefined?{extendData:value.extendData}:{}),...(value.visible!==undefined?{visible:value.visible}:{}),...(value.zLevel!==undefined?{zLevel:value.zLevel}:{}),lock:Boolean(value.lock)};
 }
 
 export class SharedCharts extends EventEmitter {

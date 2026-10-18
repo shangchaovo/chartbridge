@@ -91,7 +91,7 @@ test('Research bounds and arbitrary code are rejected before any data fetch', as
   const s = service(undefined, { candles: async () => { fetched++; return fixture(); } });
   for (const input of [
     { symbol: 'BTCUSDT', code: 'process.exit()' }, { symbol: 'https://example.com' },
-    { symbol: 'BTCUSDT', limit: 1001 }, { symbol: 'BTCUSDT', tail: 1001 },
+    { symbol: 'BTCUSDT', limit: 5001 }, { symbol: 'BTCUSDT', tail: 1001 },
     { symbol: 'BTCUSDT', indicators: Array(9).fill({ type: 'SMA' }) },
     { symbol: 'BTCUSDT', indicators: [{ type: 'SMA', period: -1 }] },
     { symbol: 'BTCUSDT', indicators: [{ type: 'MACD', fast: 30, slow: 10 }] },

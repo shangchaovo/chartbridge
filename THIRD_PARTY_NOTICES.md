@@ -6,6 +6,7 @@
 - **PineTS 0.11.1** — Copyright LuxAlgo，AGPL-3.0-only。来源：https://github.com/LuxAlgo/PineTS 。完整许可证见 `licenses/PineTS-AGPL-3.0.txt`。使用官方 browser ES 构建；当前本地适配器限制输入数据范围及绘图方式。上游另提供商业许可，该许可并未包含在本项目中。
 - **REA / rea-agents 6.5.0** — Copyright REA contributors，MIT。来源：https://github.com/morluto/rea 。仅作为独立研究工具安装在 `tools/`，不参与终端运行。完整许可证见 `licenses/REA-MIT.txt`。
 - **Acorn / acorn-walk / Astring** — MIT，PineTS 的解析与代码生成依赖。许可证原样保留于 `licenses/`。
+- **品种图标** — 原有加密图标来自 cryptocurrency-icons 0.18.1（MIT）；新增品牌 SVG 来自公开的 TradingView symbol-logo CDN，用于识别对应品种。各品牌权利归其权利人，不随仓库 AGPL 许可重新授权。来源 URL、SHA-256 和获取时间见 `src/assets/logos/sources.json`，说明见同目录 `NOTICE.txt`；货币对、商品和文字备用标记为本项目编写的 SVG。
 
 - **MCP TypeScript SDK** — `@modelcontextprotocol/server` / `core` 2.3.1，`node` 2.1.1，Apache-2.0；来源：https://github.com/modelcontextprotocol/typescript-sdk 。完整许可证保留于 `licenses/MCP-*.txt`。
 - **ws 8.22.0 / Zod 4.6.7 / Hono / @hono/node-server** — MIT；许可证原样保留于 `licenses/`，作为 WebSocket 和 MCP 依赖使用。

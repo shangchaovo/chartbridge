@@ -1,0 +1,180 @@
+{
+  "date": "2026-10-17",
+  "tool": "rea-agents 6.5.0",
+  "target": "https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT",
+  "official_reference": "https://www.tradingview.com/support/solutions/43000517002-long-position-drawing-tool/",
+  "evidence_id": "ev_a0fff7e8fe91c19ee77c41bf6568ddf891c5142ba00e64dbfe98924152e07f1e",
+  "request": "work/rea-position-20261017/long-request.json",
+  "evidence": "work/rea-position-20261017/long-evidence.json",
+  "browser": {
+    "mode": "launch",
+    "process_ownership": "provider-owned",
+    "cleanup": "terminated-owned-process",
+    "product": "Chromium",
+    "version": "151.0.7922.34"
+  },
+  "duration_ms": 19465,
+  "completeness": {
+    "status": "complete",
+    "equality_eligible": true,
+    "missing_sections": [],
+    "truncated_sections": []
+  },
+  "steps": [
+    {
+      "id": "scenario_start",
+      "status": "completed",
+      "action": "goto_start"
+    },
+    {
+      "id": "chart-ready",
+      "status": "completed",
+      "action": "wait_for_timeout"
+    },
+    {
+      "id": "open-forecast",
+      "status": "completed",
+      "action": "click"
+    },
+    {
+      "id": "forecast-menu",
+      "status": "completed",
+      "action": "wait_for_timeout"
+    },
+    {
+      "id": "choose-long",
+      "status": "completed",
+      "action": "click"
+    },
+    {
+      "id": "long-selected",
+      "status": "completed",
+      "action": "wait_for_timeout"
+    }
+  ],
+  "observed": "Opened the forecasting menu; the row-center click hit the embedded Help button. This capture does not establish tool selection or placement.",
+  "local_tools": [
+    {
+      "name": "longPosition",
+      "label": "多头仓位 · 盈亏比"
+    },
+    {
+      "name": "shortPosition",
+      "label": "空头仓位 · 盈亏比"
+    },
+    {
+      "name": "segment",
+      "label": "趋势线"
+    },
+    {
+      "name": "rayLine",
+      "label": "射线"
+    },
+    {
+      "name": "straightLine",
+      "label": "延长线"
+    },
+    {
+      "name": "infoLine",
+      "label": "信息线"
+    },
+    {
+      "name": "horizontalStraightLine",
+      "label": "水平线"
+    },
+    {
+      "name": "horizontalRayLine",
+      "label": "水平射线"
+    },
+    {
+      "name": "horizontalSegment",
+      "label": "水平线段"
+    },
+    {
+      "name": "verticalStraightLine",
+      "label": "垂直线"
+    },
+    {
+      "name": "crossLine",
+      "label": "十字线"
+    },
+    {
+      "name": "parallelStraightLine",
+      "label": "平行通道"
+    },
+    {
+      "name": "priceChannelLine",
+      "label": "价格通道"
+    },
+    {
+      "name": "fibonacciLine",
+      "label": "斐波那契回撤"
+    },
+    {
+      "name": "fibExtension",
+      "label": "趋势斐波那契扩展"
+    },
+    {
+      "name": "fibTimeZones",
+      "label": "斐波那契时间区间"
+    },
+    {
+      "name": "rect",
+      "label": "矩形"
+    },
+    {
+      "name": "localCircle",
+      "label": "圆形"
+    },
+    {
+      "name": "localEllipse",
+      "label": "椭圆"
+    },
+    {
+      "name": "localTriangle",
+      "label": "三角形"
+    },
+    {
+      "name": "arrowLine",
+      "label": "箭头"
+    },
+    {
+      "name": "localNote",
+      "label": "文字标注"
+    },
+    {
+      "name": "priceLine",
+      "label": "价格线"
+    },
+    {
+      "name": "simpleTag",
+      "label": "价格标签"
+    },
+    {
+      "name": "priceRange",
+      "label": "价格区间"
+    },
+    {
+      "name": "dateRange",
+      "label": "时间区间"
+    },
+    {
+      "name": "datePriceRange",
+      "label": "时间与价格区间"
+    },
+    {
+      "name": "anchoredVWAP",
+      "label": "锚定 VWAP"
+    },
+    {
+      "name": "fixedVolumeProfile",
+      "label": "区间量能分布（K线估算）"
+    },
+    {
+      "name": "regressionChannel",
+      "label": "线性回归通道"
+    }
+  ],
+  "local_tool_count": 30,
+  "correction_reference": "rea-position-interaction-2026-10-17.json"
+}

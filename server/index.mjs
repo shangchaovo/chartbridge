@@ -2,8 +2,12 @@ import http from 'node:http';
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { resolve, extname, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash, randomUUID } from 'node:crypto';
-import { fetchCandles } from './market-data.mjs';
+import { randomUUID } from 'node:crypto';
+import { fetchCandles, fetchHistoryPage, MAX_CANDLE_LIMIT, SYMBOL_CATALOG } from './market-data.mjs';
+import { createHistoryStore } from './history-store.mjs';
+import { syncHistory } from './history-sync.mjs';
+import { PAGE_GAP_MS, sleep } from './candle-pages.mjs';
+import { createLiveCatalog, CATALOG_REFRESH_MS } from './live-catalog.mjs';
 import { SharedCharts } from './shared-charts.mjs';
 import { MarketHub } from './market-hub.mjs';
 import { createAccess } from './access.mjs';
@@ -16,6 +20,10 @@ import { resolveFeishuWebhook } from './feishu.mjs';
 import { alertMessage, createPriceAlerts, mergeFiredAlerts } from './price-alerts.mjs';
 import { channelStatus, deliverPriceNotice, larkIdentity } from './lark-notify.mjs';
 import { scanTradingViewLocal } from './tv-local.mjs';
+import { planWatchlistImport } from './tv-watchlist-import.mjs';
+import { pythFeed } from './pyth-feed.mjs';
+import { FREE_GOLD_SOURCES, FREE_GOLD_INTERVALS } from './free-gold.mjs';
+import { mergeWatchlist } from '../src/market-categories.js';
 import { mergeAgentConfig, publicAgentStatus, requestAnnotations } from './agent-mark.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -26,13 +34,53 @@ const host = process.env.TERMINAL_HOST || '127.0.0.1';
 if(!['127.0.0.1','0.0.0.0'].includes(host)||!Number.isInteger(port)||port<1024||port>65535)throw new Error('TERMINAL_HOST / TERMINAL_PORT 无效。');
 const active = new Map();
 let stateWrite = Promise.resolve();
-const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json; charset=utf-8', '.woff2': 'font/woff2', '.ico': 'image/x-icon' };
+const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.json': 'application/json; charset=utf-8', '.woff2': 'font/woff2', '.ico': 'image/x-icon' };
 await mkdir(cacheDir, { recursive: true });
+const historyStore = createHistoryStore(join(cacheDir, 'series'));
+const freeGoldStatusPath=join(cacheDir,'free-gold-status.json');
+let freeGoldHistory=await readJson(freeGoldStatusPath,{running:false,results:[]});
+if(freeGoldHistory.running)freeGoldHistory={...freeGoldHistory,running:false,interrupted:true};
+async function prepareFreeGoldHistory(){
+  if(freeGoldHistory.running)return;
+  freeGoldHistory={running:true,startedAt:Date.now(),results:[]};
+  await atomicJson(freeGoldStatusPath,freeGoldHistory);
+  try{
+    for(const interval of FREE_GOLD_INTERVALS)for(const {symbol} of FREE_GOLD_SOURCES){
+      freeGoldHistory.current={symbol,interval};
+      try{
+        await candles(new URLSearchParams({symbol,interval,limit:'1000',refresh:'1'}));
+        const result=['1d','1w'].includes(interval)?await syncHistory({symbol,interval,store:historyStore,fetchPage:fetchHistoryPage,pause:()=>sleep(PAGE_GAP_MS)}):await historyStore.stat(symbol,interval);
+        freeGoldHistory.results.push({symbol,interval,count:result.count,oldest:result.oldest,newest:result.newest,exhausted:Boolean(result.exhausted)});
+      }catch(error){freeGoldHistory.results.push({symbol,interval,error:error.message});}
+      await atomicJson(freeGoldStatusPath,freeGoldHistory);
+    }
+  }finally{freeGoldHistory.running=false;freeGoldHistory.finishedAt=Date.now();await atomicJson(freeGoldStatusPath,freeGoldHistory);}
+}
+let pythHistory = { running: false, results: [] };
+async function backfillPythHistory() {
+  if (pythHistory.running) return;
+  pythHistory = { running: true, startedAt: Date.now(), results: [] };
+  try {
+    for (const interval of ['1d', '1w', '4h', '1h']) {
+      pythHistory.interval = interval;
+      try {
+        const result = await syncHistory({ symbol: 'PYTH:XAUUSD', interval, store: historyStore, fetchPage: fetchHistoryPage, pause: () => sleep(PAGE_GAP_MS) });
+        pythHistory.results.push(result);
+      } catch (error) {
+        const saved = await historyStore.stat('PYTH:XAUUSD', interval);
+        pythHistory.results.push({ interval, count: saved.count, oldest: saved.oldest, newest: saved.newest, warning: error.message });
+      }
+    }
+  } finally { pythHistory.running = false; pythHistory.finishedAt = Date.now(); }
+}
+const liveCatalog = await createLiveCatalog({ path: join(dataDir, 'public-catalog.json'), base: SYMBOL_CATALOG });
 const access=await createAccess(dataDir,port,host);
 const charts=new SharedCharts(join(dataDir,'charts.sqlite'),await readJson(join(dataDir,'workspace.json'),{}));
 const domesticFutures=process.env.TERMINAL_DOMESTIC_FUTURES==='1';
 const accounts=domesticFutures?await new AccountFeeds({root,dataDir}).init():null;
-const markets=createMarketScope({domesticFutures,accounts});
+const markets=createMarketScope({domesticFutures,accounts,publicCatalog:liveCatalog.catalog});
+void liveCatalog.refresh();
+const catalogTimer=setInterval(()=>void liveCatalog.refresh(),CATALOG_REFRESH_MS);catalogTimer.unref();
 function enqueueState(task){
   const run=stateWrite.then(task,task);
   stateWrite=run.catch(()=>{});
@@ -101,30 +149,43 @@ async function candles(params) {
   const symbol = params.get('symbol') || 'BTCUSDT';
   const interval = params.get('interval') || '1d';
   const limit = Number(params.get('limit') || 800);
+  const beforeText = params.get('before');
+  const before = beforeText == null || beforeText === '' ? undefined : Number(beforeText);
   markets.assertSymbol(symbol);
-  if (!/^[A-Za-z0-9.@^=:_/-]{1,50}$/.test(symbol) || !['1m','5m','15m','30m','1h','4h','1d','1w'].includes(interval) || !Number.isInteger(limit) || limit < 2 || limit > 2000) {
+  if (!/^[A-Za-z0-9.@^=:_/-]{1,50}$/.test(symbol) || !['1m','5m','15m','30m','1h','4h','1d','1w'].includes(interval) || !Number.isInteger(limit) || limit < 2 || limit > MAX_CANDLE_LIMIT || (before !== undefined && (!Number.isSafeInteger(before) || before <= 0))) {
     throw Object.assign(new Error('标的、周期或数据条数无效。'), { status: 400 });
   }
   if(symbol.startsWith('TQ:'))return accounts.candles({symbol,interval,limit});
-  const key = createHash('sha256').update(`${symbol}:${interval}:${limit}`).digest('hex');
+  const refresh = params.get('refresh') === '1';
+  const key = `${symbol}|${interval}|${limit}|${before ?? ''}|${refresh ? 1 : 0}`;
   if (active.has(key)) return active.get(key);
   const request = (async () => {
-    const path = join(cacheDir, `${key}.json`);
-    const saved = await readJson(path);
-    const fresh = saved && Date.now() - saved.cachedAt < 60_000;
-    if (fresh && params.get('refresh') !== '1') return { ...saved.payload, meta: { ...saved.payload.meta, cache: 'fresh', cachedAt: saved.cachedAt } };
+    const saved = await historyStore.read({ symbol, interval, before, limit });
+    const tailFresh = before == null && saved.updatedAt && Date.now() - saved.updatedAt < 60_000;
+    if (!refresh && saved.complete && (before != null || tailFresh)) return storedCandles(symbol, interval, saved, 'fresh');
     try {
-      const payload = await fetchCandles({ symbol, interval, limit });
-      const cachedAt = Date.now();
-      await atomicJson(path, { cachedAt, payload });
-      return { ...payload, meta: { ...payload.meta, cache: 'network', cachedAt } };
+      const payload = await fetchCandles({ symbol, interval, limit, before });
+      const markExhausted = Boolean(payload.meta?.exhausted) && (before != null || payload.candles.length < limit);
+      await historyStore.merge({ symbol, interval, bars: payload.candles, exhausted: markExhausted, quote: payload.quote, feed: payload.meta });
+      return { ...payload, meta: { ...payload.meta, cache: 'network', cachedAt: Date.now() } };
     } catch (error) {
-      if (saved) return { ...saved.payload, meta: { ...saved.payload.meta, cache: 'stale', cachedAt: saved.cachedAt, warnings: [...(saved.payload.meta.warnings || []), `在线更新失败，正在使用 ${new Date(saved.cachedAt).toISOString()} 保存的历史缓存：${error.message}`] } };
+      if (saved.candles.length) return storedCandles(symbol, interval, saved, 'stale', error.message);
       throw error;
     }
   })();
   active.set(key, request);
   try { return await request; } finally { active.delete(key); }
+}
+
+function storedCandles(symbol, interval, saved, cache, failure) {
+  const warnings = [...(saved.feed?.warnings || [])];
+  if (failure) warnings.push(`在线更新失败，正在使用 ${new Date(saved.updatedAt).toISOString()} 保存的历史缓存：${failure}`);
+  const last = saved.candles.at(-1);
+  return {
+    symbol, interval, candles: saved.candles,
+    quote: saved.quote || { price: last?.close ?? null, timestamp: last?.timestamp ?? null, change: null, changePercent: null, volume: last?.volume ?? null },
+    meta: { ...(saved.feed || {}), cache, cachedAt: saved.updatedAt, returnedCount: saved.candles.length, exhausted: Boolean(saved.exhausted), warnings },
+  };
 }
 
 async function body(req) {
@@ -190,10 +251,53 @@ const server = http.createServer(async (req, res) => {
       const initial=charts.get(room),send=eventStream(req,res);send('chart',initial);
       const changed=event=>{if(event.roomId===room)send('chart',event);};charts.on('change',changed);res.once('close',()=>charts.off('change',changed));return;
     }
-    if (url.pathname === '/api/catalog') return json(res, 200, { results: markets.catalog() });
+    if(url.pathname==='/api/feeds/gold/free'){
+      if(!principal.local)return json(res,403,{error:'请在本机页面配置免费黄金行情。'});
+      if(req.method==='GET')return json(res,200,{sources:FREE_GOLD_SOURCES,history:freeGoldHistory});
+      if(req.method==='POST'){
+        const value=await body(req);
+        if(!value||typeof value!=='object'||Array.isArray(value))return json(res,400,{error:'请求格式无效。'});
+        if(value.watchlist!=null&&(!Array.isArray(value.watchlist)||value.watchlist.length>150||value.watchlist.some(symbol=>typeof symbol!=='string'||!/^[A-Z0-9.^=:_/-]{1,50}$/.test(symbol))))return json(res,400,{error:'自选清单格式无效。'});
+        const watchlist=await enqueueState(async()=>{
+          const saved=await readJson(join(dataDir,'workspace.json'),{});
+          let merged;
+          try{merged=mergeWatchlist(saved.watchlist||[],[...(value.watchlist||[]),...FREE_GOLD_SOURCES.map(row=>row.symbol)]).watchlist;}
+          catch(error){throw Object.assign(error,{status:400});}
+          await atomicJson(join(dataDir,'workspace.previous.json'),saved);
+          await atomicJson(join(dataDir,'workspace.json'),{...saved,watchlist:merged});return merged;
+        });
+        void prepareFreeGoldHistory().catch(()=>{});
+        return json(res,200,{sources:FREE_GOLD_SOURCES,watchlist,history:freeGoldHistory});
+      }
+      return json(res,405,{error:'不支持的请求方法。'});
+    }
+    if (url.pathname === '/api/feeds/pyth') {
+      if (!principal.local) return json(res, 403, { error: '请在本机页面配置 PYTH 数据授权。' });
+      if (req.method === 'GET') return json(res, 200, { ...await pythFeed.status(), history: pythHistory });
+      if (req.method === 'PUT') {
+        const value = await body(req);
+        const result = await pythFeed.save(value?.apiKey);
+        void backfillPythHistory().catch(() => {});
+        return json(res, 200, { ...result, history: pythHistory });
+      }
+      return json(res, 405, { error: '不支持的请求方法。' });
+    }
+    if (url.pathname === '/api/catalog') { await liveCatalog.refresh(); return json(res, 200, { results: markets.catalog(), meta: liveCatalog.meta() }); }
+    if (url.pathname === '/api/candles/backfill' && req.method === 'POST') {
+      if (!principal.local) return json(res, 403, { error: '补齐历史只在主机本机进行。' });
+      const value = await body(req);
+      const symbol = String(value?.symbol || '').trim().toUpperCase();
+      const interval = String(value?.interval || '1d');
+      markets.assertSymbol(symbol);
+      if (!['1m','5m','15m','30m','1h','4h','1d','1w'].includes(interval)) return json(res, 400, { error: '周期无效。' });
+      const result = await syncHistory({ symbol, interval, store: historyStore, fetchPage: args => fetchHistoryPage(args), pause: () => sleep(PAGE_GAP_MS) });
+      return json(res, 200, result);
+    }
     if (url.pathname === '/api/candles') return json(res, 200, await candles(url.searchParams));
     if (url.pathname === '/api/search'){
-      return json(res,200,await markets.search((url.searchParams.get('q')||'').slice(0,80)));
+      await liveCatalog.refresh();
+      const result=await markets.search((url.searchParams.get('q')||'').slice(0,80));
+      return json(res,200,{...result,meta:{...result.meta,warnings:[...(result.meta?.warnings||[]),...liveCatalog.meta().warnings]}});
     }
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200,principal.local?await readJson(join(dataDir, 'workspace.json'), {}):{});
     if(url.pathname==='/api/alerts/channel'&&req.method==='GET'){
@@ -202,7 +306,26 @@ const server = http.createServer(async (req, res) => {
     }
     if(url.pathname==='/api/tv-local'&&req.method==='GET'){
       if(!principal.local)return json(res,403,{error:'本机 TradingView 库只在主机 localhost 页面读取。'});
-      return json(res,200,scanTradingViewLocal());
+      return json(res,200,scanTradingViewLocal(process.env,{listId:url.searchParams.get('list')}));
+    }
+    if(url.pathname==='/api/tv-local/import'&&req.method==='POST'){
+      if(!principal.local)return json(res,403,{error:'本机自选只在主机 localhost 页面同步。'});
+      const value=await body(req);
+      if(value.watchlist!==undefined&&(!Array.isArray(value.watchlist)||value.watchlist.length>150||value.watchlist.some(symbol=>typeof symbol!=='string')))return json(res,400,{error:'自选列表无效或超过 150 个。'});
+      const found=scanTradingViewLocal(process.env,{listId:value.listId});
+      await liveCatalog.refresh();
+      let imported;
+      await enqueueState(async()=>{
+        const previous=await readJson(join(dataDir,'workspace.json'),{});
+        const current=Array.isArray(value.watchlist)?{...previous,watchlist:value.watchlist}:previous;
+        imported=planWatchlistImport(found,current,markets.catalog());
+        await liveCatalog.addInstruments(imported.instruments);
+        if(value.apply===true){
+          await atomicJson(join(dataDir,'workspace.previous.json'),previous);
+          await atomicJson(join(dataDir,'workspace.json'),{...previous,watchlist:imported.watchlist});
+        }
+      });
+      return json(res,200,{...imported,sourceCount:found.symbols.length});
     }
     if(url.pathname==='/api/agent/status'&&req.method==='GET'){
       if(!principal.local)return json(res,403,{error:'Agent 配置只在主机 localhost 页面读取。'});
