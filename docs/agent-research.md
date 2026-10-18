@@ -84,19 +84,19 @@ Agent 也可读写 `longPosition` / `shortPosition` 仓位计划。`points` 必�
 
 ## 无需安装依赖的 Node 示例
 
-在另一台电脑使用 Node 18+，设置环境变量 `SHANHAI_URL` 为主机地址、`SHANHAI_TOKEN` 为对应凭据，再运行随附的「Agent连接示例.mjs」。变量只设置在自己的终端环境中，不写进示例源码。
+在另一台电脑使用 Node 18+，设置环境变量 `CHARTBRIDGE_URL` 为主机地址、`CHARTBRIDGE_TOKEN` 为对应凭据，再运行仓库的 `scripts/agent-example.mjs`。旧的 `SHANHAI_URL` / `SHANHAI_TOKEN` 继续兼容。变量只设置在自己的终端环境中，不写进示例源码。
 
 ```sh
-node Agent连接示例.mjs
-node Agent连接示例.mjs --research indicators
-node Agent连接示例.mjs --research backtest
+node scripts/agent-example.mjs
+node scripts/agent-example.mjs --research indicators
+node scripts/agent-example.mjs --research backtest
 ```
 
 前述命令只查询。使用编辑凭据，明确添加 `--share-research` 才发布计算批注：
 
 ```sh
-node Agent连接示例.mjs --research indicators --share-research
-node Agent连接示例.mjs --note "需要其他研究者参考的观察"
+node scripts/agent-example.mjs --research indicators --share-research
+node scripts/agent-example.mjs --note "需要其他研究者参考的观察"
 ```
 
 示例在发布前会重新读取版本，图表标的或周期已变时停止发布，要求重新计算。

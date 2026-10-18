@@ -4,14 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#131722" />
-  <meta name="description" content="在本机研究全球市场，保存图表，运行 Pine 指标与策略回测。" />
-  <title>山海 · 本地行情研究终端</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23131722'/%3E%3Cpath d='M6 23 13 9 18 19 23 8 27 23' stroke='%232962ff' stroke-width='2' fill='none'/%3E%3C/svg%3E" />
+  <meta name="description" content="ChartBridge 图桥：让人和 AI Agent 在同一张图上研究市场，连接真实行情、绘图、交易计划与协作。" />
+  <title>ChartBridge · 图桥 — 本地交易研究工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23131722'/%3E%3Cpath d='M5 25h22M9 25V15M23 25V9M5 19l6-8 6 5L27 5' stroke='%232962ff' stroke-width='2' fill='none'/%3E%3C/svg%3E" />
 </head>
 <body>
   <div id="app">
     <section class="chart-toolbar" aria-label="图表工具栏">
-      <a class="brand" href="/" aria-label="山海本地行情终端"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 25 12 7 19 21 25 7 30 25"/></svg><span>山海</span></a>
+      <a class="brand" href="/" aria-label="ChartBridge 图桥 · 本地交易研究工作台"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 25h26M8 25V14M24 25V8M3 19l7-8 7 5L29 4"/></svg><span>图桥</span></a>
       <button class="symbol-picker" id="symbol-picker"><span id="symbol-mark"></span><span id="symbol-label">BTCUSDT</span><span class="picker-search" aria-hidden="true"></span></button>
       <span class="divider"></span>
       <div class="periods" id="periods" role="group" aria-label="K线周期">
@@ -77,7 +77,7 @@
           </div>
           <div id="chart" class="chart"></div><div id="chart-secondary" class="chart hidden"></div>
           <div class="chart-message hidden" id="chart-message" role="status"></div>
-          <div class="chart-watermark">山海 <span>LOCAL RESEARCH</span></div>
+          <div class="chart-watermark">图桥 <span>CHARTBRIDGE</span></div>
         </div>
         <div class="replay-strip hidden" id="replay-strip">
           <span id="replay-hint">点击一根 K 线作为起点</span>
@@ -140,7 +140,7 @@
         <div class="detail-card" id="instrument-detail" hidden></div>
       </aside>
     </main>
-    <footer class="statusbar"><span><span class="status-dot" id="connection-dot"></span><span id="connection-status">正在连接</span></span><span id="data-status">—</span><span class="local-pill">本机研究</span><span class="topbar-spacer"></span><span id="clock"></span><span class="version-label">山海 0.4.1</span></footer>
+    <footer class="statusbar"><span><span class="status-dot" id="connection-dot"></span><span id="connection-status">正在连接</span></span><span id="data-status">—</span><span class="local-pill">本机研究</span><span class="topbar-spacer"></span><span id="clock"></span><span class="version-label">ChartBridge 0.4.1</span></footer>
   </div>
   <dialog id="modal"><div id="modal-content"></div></dialog>
   <div id="toast" class="toast" role="status"></div>

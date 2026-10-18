@@ -44,7 +44,7 @@ try { existing = await (await fetch(`${url}api/health`, { signal: AbortSignal.ti
 if (existing) {
   if (existing.app !== 'shanhai-market-terminal') { console.error(`端口 ${port} 正被其他程序使用。`); process.exit(1); }
   if (host === '0.0.0.0' && existing.mode !== 'lan') { console.error('本机模式已在运行；先停止原服务，再启用局域网模式。'); process.exit(1); }
-  console.log(`山海终端已在运行：${url}`); openBrowser(); process.exit(0);
+  console.log(`ChartBridge 图桥已在运行：${url}`); openBrowser(); process.exit(0);
 }
 
 mkdirSync(join(root, 'work'), { recursive: true });
@@ -70,7 +70,7 @@ const development = args.includes('--dev');
 if (!development) run(process.execPath, [join(root, 'scripts', 'build.mjs')]);
 const server = spawn(process.execPath, [join(root, development ? 'scripts/dev.mjs' : 'server/index.mjs')], { cwd: root, env, stdio, windowsHide: background });
 if (log !== null) closeSync(log);
-console.log(`山海终端：${url}（${host === '0.0.0.0' ? 'LAN / Tailscale' : '本机'}）`);
+console.log(`ChartBridge 图桥：${url}（${host === '0.0.0.0' ? 'LAN / Tailscale' : '本机'}）`);
 let finished = false;
 server.once('error', error => { console.error(error.message); process.exitCode = 1; finished = true; });
 server.once('exit', code => { finished = true; process.exitCode = code || 0; });

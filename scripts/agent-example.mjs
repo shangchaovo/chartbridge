@@ -1,15 +1,15 @@
 // Node 18+; run this on another LAN computer. No package installation needed.
 import { randomUUID } from 'node:crypto';
-const base=process.env.SHANHAI_URL;
-const token=process.env.SHANHAI_TOKEN;
-if(!base||!token){console.error('Set SHANHAI_URL to the host URL and SHANHAI_TOKEN to its reader/editor token.');process.exit(1);}
+const base=process.env.CHARTBRIDGE_URL||process.env.SHANHAI_URL;
+const token=process.env.CHARTBRIDGE_TOKEN||process.env.SHANHAI_TOKEN;
+if(!base||!token){console.error('Set CHARTBRIDGE_URL to the host URL and CHARTBRIDGE_TOKEN to its reader/editor token. Legacy SHANHAI_URL / SHANHAI_TOKEN are also supported.');process.exit(1);}
 const url=new URL('/mcp',base);let requestId=0;
 async function rpc(method,params){
   const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25',Authorization:`Bearer ${token}`},body:JSON.stringify({jsonrpc:'2.0',id:++requestId,method,params}),signal:AbortSignal.timeout(30000)});
   const payload=await response.json();if(!response.ok||payload.error)throw new Error(payload.error?.message||payload.error||`HTTP ${response.status}`);return payload.result;
 }
 async function tool(name,args={}){const result=await rpc('tools/call',{name,arguments:args});if(result.isError)throw new Error(result.content?.[0]?.text||'Tool failed');return result.structuredContent;}
-await rpc('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'shanhai-lan-example',version:'0.4.0'}});
+await rpc('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'chartbridge-lan-example',version:'0.4.1'}});
 const chart=await tool('terminal_get_chart',{room:'main'});
 const quote=await tool('terminal_get_live_quote',{symbol:chart.state.symbol,waitMs:8000});
 console.log(JSON.stringify({room:chart.roomId,revision:chart.revision,symbol:chart.state.symbol,interval:chart.state.interval,quote},null,2));

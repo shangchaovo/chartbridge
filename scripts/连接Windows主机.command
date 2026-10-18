@@ -16,8 +16,8 @@ for terminal_attempt in {1..40}; do
   sleep 0.25
 done
 if [[ "$terminal_ready" != 1 ]]; then
-  print "尚未连到 Windows。请确认 主机、Tailscale 和 Windows 山海服务正在运行。"
+  print "尚未连到 Windows。请确认 主机、Tailscale 和 Windows 图桥服务正在运行。"
   exit 1
 fi
 if [[ "${1:-}" != "--no-open" ]]; then /usr/bin/open http://127.0.0.1:18765/; fi
-print "已连接 Windows 山海主机：http://127.0.0.1:18765/"
+print "已连接 Windows 图桥主机：http://127.0.0.1:18765/"

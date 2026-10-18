@@ -205,7 +205,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   const url = new URL(req.url, `http://127.0.0.1:${port}`);
   try {
-    if(url.pathname==='/api/health')return json(res,200,{ok:true,app:'shanhai-market-terminal',version:'0.4.1',mode:host==='0.0.0.0'?'lan':'local',features:markets.features,at:new Date().toISOString()});
+    if(url.pathname==='/api/health')return json(res,200,{ok:true,app:'shanhai-market-terminal',name:'ChartBridge',displayName:'图桥',version:'0.4.1',mode:host==='0.0.0.0'?'lan':'local',features:markets.features,at:new Date().toISOString()});
     if(url.pathname==='/api/session'&&req.method==='POST'){
       const value=await body(req);if(!access.login(value?.token,res))return json(res,401,{error:'连接凭据无效。'});return json(res,200,{ok:true});
     }
@@ -353,7 +353,7 @@ const server = http.createServer(async (req, res) => {
     }
     if(url.pathname==='/api/alerts/test'&&req.method==='POST'){
       if(!principal.local)return json(res,403,{error:'飞书测试只在主机本机页面发送。'});
-      const result=await deliverPriceNotice('【测试】山海价格提醒通道。这不是真实价格触发。',{readConfig:webhookConfig,idempotencyKey:'shanhai-alert-test'});
+      const result=await deliverPriceNotice('【测试】图桥价格提醒通道。这不是真实价格触发。',{readConfig:webhookConfig,idempotencyKey:'shanhai-alert-test'});
       const reasonText={missing_webhook:'还没有可用的飞书身份或 webhook。',invalid_webhook:'飞书 webhook 格式无效。',upstream_unreachable:'飞书 webhook 连不上。',upstream_rejected:'飞书拒绝了测试消息。',cli_unavailable:'lark-cli 没有可用的用户或机器人身份。',cli_no_user:'lark-cli 没有可发送的用户。',cli_rejected:'lark-cli 没有返回消息编号。',confirmation_required:'飞书 CLI 要求再次确认后才能发送。'};
       return json(res,result.sent?200:503,{sent:Boolean(result.sent),reason:result.reason||'',channel:result.channel||'',messageId:result.messageId||'',...(result.sent?{}:{error:reasonText[result.reason]||'飞书测试没有发出。'})});
     }
@@ -401,5 +401,5 @@ server.on('error', error => {
   console.error(error.code === 'EADDRINUSE' ? `端口 ${port} 已占用。现有终端可能已在运行：http://127.0.0.1:${port}` : error.message);
   process.exitCode = 1;
 });
-server.listen(port,host,()=>console.log(`山海 · 本地行情终端\nLocal: http://127.0.0.1:${port}\n${access.connection({role:'owner',local:true}).urls.map(url=>`LAN: ${url}`).join('\n')}\n数据目录: ${dataDir}\n局域网凭据请在本机页面的「协作」中查看。按 Ctrl+C 停止。`));
+server.listen(port,host,()=>console.log(`ChartBridge · 图桥 — 本地交易研究工作台\nLocal: http://127.0.0.1:${port}\n${access.connection({role:'owner',local:true}).urls.map(url=>`LAN: ${url}`).join('\n')}\n数据目录: ${dataDir}\n局域网凭据请在本机页面的「协作」中查看。按 Ctrl+C 停止。`));
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{hub.close();await accounts?.disconnect();for(const stream of streams)stream.end();server.close(()=>{charts.close();process.exit(0);});server.closeIdleConnections();});

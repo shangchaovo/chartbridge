@@ -1,5 +1,11 @@
 {
-  "name": "local-market-terminal",
+  "name": "chartbridge",
+  "description": "A local market research workspace connecting charts, trading intent, and AI agents.",
+  "homepage": "https://github.com/shangchaovo/chartbridge",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shangchaovo/chartbridge.git"
+  },
   "version": "0.4.1",
   "private": true,
   "type": "module",

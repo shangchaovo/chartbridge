@@ -32,7 +32,7 @@ export async function calculateResearch({ kind, input, candles }) {
   }
   if (kind === 'backtest') {
     const result = runBacktest(candles, input.options);
-    return { engine: { name: 'Shanhai backtest', version: '1', execution: 'next-bar-open' }, options: result.options,
+    return { engine: { name: 'ChartBridge backtest', version: '1', execution: 'next-bar-open' }, options: result.options,
       metrics: result.metrics, trades: result.trades.slice(-input.tail), equity: result.equity.slice(-input.tail),
       tradeCount: result.trades.length, equityCount: result.equity.length, warnings: result.warnings };
   }

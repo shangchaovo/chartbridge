@@ -26,7 +26,7 @@ if [[ -n "$terminal_running_mode" ]]; then
     exit 2
   fi
   if [[ "$terminal_open_browser" == 1 ]]; then /usr/bin/open "$terminal_url"; fi
-  print "山海终端已在运行：$terminal_url"
+  print "ChartBridge 图桥已在运行：$terminal_url"
   exit 0
 fi
 if [[ ! -f node_modules/pinets/package.json || ! -f node_modules/klinecharts/package.json || ! -f node_modules/@modelcontextprotocol/server/package.json || ! -f node_modules/ws/package.json ]]; then
@@ -42,6 +42,6 @@ if [[ "$terminal_open_browser" == 1 ]]; then
   sleep 0.25
 done) &
 fi
-print "山海 · 本地行情终端"
+print "ChartBridge · 图桥 — 本地交易研究工作台"
 print "保持本窗口打开。关闭服务请按 Ctrl+C。"
 npm start
