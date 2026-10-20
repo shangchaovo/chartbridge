@@ -26,9 +26,9 @@ ChartBridge focuses on three connections:
 
 | Area | Implemented capabilities |
 | --- | --- |
-| Market data and watchlists | Public OHLCV across several markets, search and watchlists, distinct venues and sources, local icons, paginated history and caching, source timestamps and delay labels |
+| Market data and watchlists | Public OHLCV across several markets, search and watchlists, immediate watchlist backup and login recovery, distinct venues and sources, local icons, paginated history and caching, source timestamps and delay labels |
 | Charts and navigation | Candlestick, hollow candle, OHLC, pure line, and area views; eight timeframes; dual charts; price-scale controls; timezone selection; date navigation; bar-close countdown |
-| Drawings and management | 32 tools, including lines, channels, Fibonacci tools, shapes, text, range measurements, brush, and translucent highlighter; style/coordinate editing, object management, visibility, locking, stacking, undo, and redo |
+| Drawings and management | 37 tools, including lines, channels, Fibonacci tools, shapes, path, polyline, arcs, curves, text, range measurements, brush, and translucent highlighter; a draggable favorites toolbar with saved position; style/coordinate editing, object management, visibility, locking, stacking, undo, and redo |
 | Trade planning | Long/short position drawings with separate entry, stop, target, and width handles; risk-based sizing; fees, slippage, contract multiplier, estimated margin, persistence, and export |
 | Price and volume studies | Anchored VWAP, regression channels, and fixed-range volume profiles explicitly labeled as candle-based estimates |
 | Scripts and backtests | Experimental Pine v5/v6 editor, technical indicators, bar replay, and basic EMA/RSI/buy-and-hold backtests with fees, slippage, and trade records |
@@ -64,7 +64,7 @@ Choose a symbol from search or your watchlist, switch timeframes, and draw on th
 
 ## Connect an agent
 
-The MCP endpoint is `http://<host>:18765/mcp`. On the host's local page, open **协作与 Agent → 局域网连接凭据** in the collaboration panel to obtain reader or editor credentials. Configure the MCP client's `Authorization: Bearer <token>` header.
+The MCP endpoint is `http://<host>:18765/mcp`. On the host's local page, open **协作与 Agent → 局域网连接凭据** in the collaboration panel to obtain reader or editor credentials. Configure the MCP client's `Authorization: Bearer <token>` header. Devices on the same Tailscale tailnet skip credentials and act as owner via `https://<host>.ts.net:18443/mcp`.
 
 - **Reader credentials** allow market queries, chart inspection, indicators, and basic backtests.
 - **Editor credentials** additionally allow drawing and annotation updates. Writes include a chart revision to avoid overwriting newer edits.
@@ -94,7 +94,7 @@ ChartBridge is an independent open-source project under active development. It d
 
 | Direction | Current state and next steps |
 | --- | --- |
-| Chart interactions | Extend tool-specific settings, paths/curves, timeframes, chart types, named templates, and multi-chart synchronization |
+| Chart interactions | Extend tool-specific settings, curves and arcs, timeframes, chart types, named templates, and multi-chart synchronization |
 | Market semantics | Improve exchange calendars, session breaks/overnight sessions, corporate-action adjustments, contract rolls/specifications, and cross-source consistency |
 | Positions and intent | Connect local positions, cost basis, and account context; current position drawings are independent research plans |
 | Scripts, backtests, and alerts | Expand the Pine subset, drawing objects, execution rules, and advanced indicator/drawing alert conditions |
@@ -113,6 +113,8 @@ The independent basic backtester uses close-based signals and next-bar-open exec
 **KLineCharts** renders the charts and **PineTS** provides experimental Pine execution. The Node.js server handles market adapters, history caching, shared state, and MCP. REA is used for independent research and is not a runtime dependency.
 
 - [Feature coverage, verification, and remaining gaps](docs/feature-audit-2026-10-18.md)
+- [Drawing favorites toolbar and REA evidence](docs/drawing-favorites-2026-10-20.md)
+- [Watchlist persistence and data recovery](docs/watchlist-persistence-2026-10-20.md)
 - [Position drawing usage and calculation assumptions](docs/position-planning-and-audit.md)
 - [Agent calculations and shared charts](docs/agent-research.md)
 - [Data sources and private-network use](docs/lan-and-live.md)

@@ -5,19 +5,22 @@ import { join } from 'node:path';
 import { isIP } from 'node:net';
 const loopback=address=>['127.0.0.1','::1','::ffff:127.0.0.1'].includes(address);
 export const isPrivateIPv4=address=>typeof address==='string'&&isIP(address)===4&&(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address)||/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(address));
+export const isTailnetIPv4=address=>isPrivateIPv4(address)&&typeof address==='string'&&address.startsWith('100.');
 export function normalizeBindAddress(address){return typeof address==='string'&&address.startsWith('::ffff:')?address.slice(7):address||'';}
 export function isTrustedBindAddress(address){const normalized=normalizeBindAddress(address);return loopback(address)||loopback(normalized)||isPrivateIPv4(normalized);}
 const same=(a,b)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
-export async function createAccess(dataDir,port,host){
+export async function createAccess(dataDir,port,host,extraHosts=[]){
   const path=join(dataDir,'access.json');let credentials;
   try{credentials=JSON.parse(await readFile(path,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
   if(!credentials){credentials={reader:randomBytes(32).toString('base64url'),editor:randomBytes(32).toString('base64url')};await writeFile(path,JSON.stringify(credentials),{mode:0o600,flag:'wx'});}
   for(const role of ['reader','editor'])if(!/^[A-Za-z0-9_-]{40,100}$/.test(credentials[role]||''))throw new Error('本机访问凭据文件格式无效。');
   const ips=[...new Set(Object.values(networkInterfaces()).flat().filter(n=>n&&!n.internal&&n.family==='IPv4'&&isPrivateIPv4(n.address)).map(n=>n.address))];
-  const lan=host==='0.0.0.0',hosts=new Set([`127.0.0.1:${port}`,`localhost:${port}`,`[::1]:${port}`,...(lan?ips.map(ip=>`${ip}:${port}`):[])]);
+  const serveHosts=new Set(extraHosts.map(h=>String(h).trim().toLowerCase()).filter(Boolean));
+  const lan=host==='0.0.0.0',hosts=new Set([`127.0.0.1:${port}`,`localhost:${port}`,`[::1]:${port}`,...serveHosts,...(lan?ips.map(ip=>`${ip}:${port}`):[])]);
   const sessions=new Map();
   function local(req){return loopback(req.socket.remoteAddress)&&new Set([`127.0.0.1:${port}`,`localhost:${port}`,`[::1]:${port}`]).has(req.headers.host);}
-  function originAllowed(origin){if(!origin)return true;if(!origin.startsWith('http://'))return false;return hosts.has(origin.slice('http://'.length));}
+  function tailnet(req){const remote=req.socket?.remoteAddress;return isTailnetIPv4(remote)||loopback(remote)&&serveHosts.has(String(req.headers.host||'').toLowerCase());}
+  function originAllowed(origin){if(!origin)return true;const scheme=/^https?:\/\//.exec(origin);if(!scheme)return false;return hosts.has(origin.slice(scheme[0].length).toLowerCase());}
   function allowed(req){return isTrustedBindAddress(req.socket?.localAddress)&&hosts.has(req.headers.host)&&originAllowed(req.headers.origin)&&req.headers['sec-fetch-site']!=='cross-site';}
   function tokenRole(token){for(const role of ['reader','editor'])if(same(token,credentials[role]))return role;return null;}
   function principal(req){
@@ -25,7 +28,9 @@ export async function createAccess(dataDir,port,host){
     if(auth){const role=tokenRole(auth.replace(/^Bearer\s+/i,''));return role?{role,local:false,kind:'human'}:null;}
     const cookie=req.headers.cookie?.split(';').map(x=>x.trim()).find(x=>x.startsWith('shanhai_session='))?.slice('shanhai_session='.length);
     if(cookie){const session=sessions.get(cookie);if(session?.expires>Date.now())return {role:session.role,local:false,kind:'human'};sessions.delete(cookie);}
-    return local(req)?{role:'owner',local:true,kind:'human'}:null;
+    if(local(req))return {role:'owner',local:true,kind:'human'};
+    if(tailnet(req))return {role:'owner',local:false,kind:'human'};
+    return null;
   }
   return {local,allowed,principal,credentials,
     connection(principal){return {mode:lan?'lan':'local',role:principal.role,local:principal.local,urls:lan?ips.map(ip=>`http://${ip}:${port}`):[],mcpPath:'/mcp',roomId:'main'};},

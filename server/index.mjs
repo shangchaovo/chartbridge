@@ -24,6 +24,8 @@ import { planWatchlistImport } from './tv-watchlist-import.mjs';
 import { pythFeed } from './pyth-feed.mjs';
 import { FREE_GOLD_SOURCES, FREE_GOLD_INTERVALS } from './free-gold.mjs';
 import { mergeWatchlist } from '../src/market-categories.js';
+import { mergeSavedWatchlist, validWatchlist } from '../src/watchlist-state.js';
+import { openWorkspaceStore } from './workspace-store.mjs';
 import { mergeAgentConfig, publicAgentStatus, requestAnnotations } from './agent-mark.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -74,8 +76,10 @@ async function backfillPythHistory() {
   } finally { pythHistory.running = false; pythHistory.finishedAt = Date.now(); }
 }
 const liveCatalog = await createLiveCatalog({ path: join(dataDir, 'public-catalog.json'), base: SYMBOL_CATALOG });
-const access=await createAccess(dataDir,port,host);
-const charts=new SharedCharts(join(dataDir,'charts.sqlite'),await readJson(join(dataDir,'workspace.json'),{}));
+const serveHosts=String(process.env.TERMINAL_SERVE_HOSTS||'').split(',').map(s=>s.trim()).filter(Boolean);
+const access=await createAccess(dataDir,port,host,serveHosts);
+const workspace=await openWorkspaceStore(dataDir);
+const charts=new SharedCharts(join(dataDir,'charts.sqlite'),workspace.read());
 const domesticFutures=process.env.TERMINAL_DOMESTIC_FUTURES==='1';
 const accounts=domesticFutures?await new AccountFeeds({root,dataDir}).init():null;
 const markets=createMarketScope({domesticFutures,accounts,publicCatalog:liveCatalog.catalog});
@@ -88,9 +92,9 @@ function enqueueState(task){
 }
 const webhookConfig=()=>readJson(join(dataDir,'notify.json'),{});
 const priceAlerts=createPriceAlerts({
-  readState:()=>readJson(join(dataDir,'workspace.json'),{}),
+  readState:()=>workspace.read(),
   updateAlerts:fired=>enqueueState(async()=>{
-    const current=await readJson(join(dataDir,'workspace.json'),{});
+    const current=workspace.read();
     if(!current||typeof current!=='object'||!Array.isArray(current.alerts))return;
     let changed=false;
     for(const next of fired){
@@ -98,7 +102,7 @@ const priceAlerts=createPriceAlerts({
       if(!alert||alert.firedAt)continue;
       alert.firedAt=next.firedAt;alert.triggerPrice=next.triggerPrice;alert.notice=next.notice;changed=true;
     }
-    if(changed)await atomicJson(join(dataDir,'workspace.json'),current);
+    if(changed)workspace.write(current);
   }),
   deliver:async(alert,price)=>{
     const result=await deliverPriceNotice(alertMessage(alert,price),{readConfig:webhookConfig,idempotencyKey:`alert-${alert.id}`});
@@ -111,7 +115,7 @@ accounts?.on('data',event=>hub.publish(event));
 accounts?.on('status',event=>hub.publish({type:'status',provider:'tqsdk',...event}));
 // 后台盯盘：读取工作区未触发提醒的标的，交由行情中枢在没有页面客户端时也保持订阅与评估。
 function refreshAlertDemand(){
-  readJson(join(dataDir,'workspace.json'),{}).then(state=>{
+  Promise.resolve(workspace.read()).then(state=>{
     const alerts=Array.isArray(state?.alerts)?state.alerts:[];
     const symbols=[...new Set(alerts.filter(a=>a&&!a.firedAt&&typeof a.symbol==='string').map(a=>a.symbol.trim().toUpperCase()).filter(Boolean))];
     hub.setBackgroundSymbols(symbols);
@@ -259,12 +263,11 @@ const server = http.createServer(async (req, res) => {
         if(!value||typeof value!=='object'||Array.isArray(value))return json(res,400,{error:'请求格式无效。'});
         if(value.watchlist!=null&&(!Array.isArray(value.watchlist)||value.watchlist.length>150||value.watchlist.some(symbol=>typeof symbol!=='string'||!/^[A-Z0-9.^=:_/-]{1,50}$/.test(symbol))))return json(res,400,{error:'自选清单格式无效。'});
         const watchlist=await enqueueState(async()=>{
-          const saved=await readJson(join(dataDir,'workspace.json'),{});
+          const saved=workspace.read();
           let merged;
           try{merged=mergeWatchlist(saved.watchlist||[],[...(value.watchlist||[]),...FREE_GOLD_SOURCES.map(row=>row.symbol)]).watchlist;}
           catch(error){throw Object.assign(error,{status:400});}
-          await atomicJson(join(dataDir,'workspace.previous.json'),saved);
-          await atomicJson(join(dataDir,'workspace.json'),{...saved,watchlist:merged});return merged;
+          workspace.write({...saved,watchlist:merged});return merged;
         });
         void prepareFreeGoldHistory().catch(()=>{});
         return json(res,200,{sources:FREE_GOLD_SOURCES,watchlist,history:freeGoldHistory});
@@ -299,7 +302,7 @@ const server = http.createServer(async (req, res) => {
       const result=await markets.search((url.searchParams.get('q')||'').slice(0,80));
       return json(res,200,{...result,meta:{...result.meta,warnings:[...(result.meta?.warnings||[]),...liveCatalog.meta().warnings]}});
     }
-    if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200,principal.local?await readJson(join(dataDir, 'workspace.json'), {}):{});
+    if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200,principal.local?workspace.read():{});
     if(url.pathname==='/api/alerts/channel'&&req.method==='GET'){
       const [identity,target]=await Promise.all([larkIdentity(),resolveFeishuWebhook({readConfig:webhookConfig})]);
       return json(res,200,channelStatus(identity,target));
@@ -316,13 +319,12 @@ const server = http.createServer(async (req, res) => {
       await liveCatalog.refresh();
       let imported;
       await enqueueState(async()=>{
-        const previous=await readJson(join(dataDir,'workspace.json'),{});
+        const previous=workspace.read();
         const current=Array.isArray(value.watchlist)?{...previous,watchlist:value.watchlist}:previous;
         imported=planWatchlistImport(found,current,markets.catalog());
         await liveCatalog.addInstruments(imported.instruments);
         if(value.apply===true){
-          await atomicJson(join(dataDir,'workspace.previous.json'),previous);
-          await atomicJson(join(dataDir,'workspace.json'),{...previous,watchlist:imported.watchlist});
+          workspace.write({...previous,watchlist:imported.watchlist});
         }
       });
       return json(res,200,{...imported,sourceCount:found.symbols.length});
@@ -361,14 +363,19 @@ const server = http.createServer(async (req, res) => {
       if(!principal.local)return json(res,403,{error:'远端个人偏好保存在浏览器；请通过协作接口编辑共享图表。'});
       const value = await body(req);
       if (!value || typeof value !== 'object' || Array.isArray(value)) return json(res, 400, { error: '工作区必须是 JSON 对象。' });
+      const {watchlistBase,...next}=value;
+      if(next.watchlist!==undefined&&!validWatchlist(next.watchlist)||watchlistBase!==undefined&&!validWatchlist(watchlistBase))return json(res,400,{error:'自选列表无效或超过 150 个。'});
+      let savedWatchlist;
       await enqueueState(async () => {
-        const old = await readJson(join(dataDir, 'workspace.json'));
-        if (old) await atomicJson(join(dataDir, 'workspace.previous.json'), old);
-        await atomicJson(join(dataDir, 'workspace.json'), mergeFiredAlerts(old, value));
+        const old = workspace.read();
+        if(next.watchlist!==undefined){
+          try{next.watchlist=mergeSavedWatchlist(watchlistBase||[],next.watchlist,old.watchlist||[]);}catch(error){throw Object.assign(error,{status:400});}
+        }
+        workspace.write(mergeFiredAlerts(old,next));savedWatchlist=next.watchlist;
       });
       refreshAlertDemand();
       void priceAlerts.scan([...hub.quotes.values()]);
-      return json(res, 200, { ok: true, savedAt: Date.now() });
+      return json(res, 200, { ok: true, savedAt: Date.now(),watchlist:savedWatchlist });
     }
     if (url.pathname.startsWith('/api/')) return json(res, 404, { error: '接口不存在。' });
     let pathname;
@@ -402,4 +409,4 @@ server.on('error', error => {
   process.exitCode = 1;
 });
 server.listen(port,host,()=>console.log(`ChartBridge · 图桥 — 本地交易研究工作台\nLocal: http://127.0.0.1:${port}\n${access.connection({role:'owner',local:true}).urls.map(url=>`LAN: ${url}`).join('\n')}\n数据目录: ${dataDir}\n局域网凭据请在本机页面的「协作」中查看。按 Ctrl+C 停止。`));
-for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{hub.close();await accounts?.disconnect();for(const stream of streams)stream.end();server.close(()=>{charts.close();process.exit(0);});server.closeIdleConnections();});
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{hub.close();await accounts?.disconnect();for(const stream of streams)stream.end();server.close(()=>{charts.close();workspace.close();process.exit(0);});server.closeIdleConnections();});

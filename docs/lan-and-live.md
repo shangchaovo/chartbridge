@@ -6,8 +6,8 @@
 
 1. 在项目目录执行 `npm start`，或使用本机启动器。页面是 http://127.0.0.1:18765/ 。
 2. 只在需要给同一私网的其他设备使用时，才用局域网启动方式。
-3. 在主机页面打开「协作与 Agent → 局域网连接凭据」。地址以页面当前显示为准。
-4. 其他设备输入主机生成的只读或编辑凭据。这是本终端的访问凭据，不是交易所账户。不要把凭据放进 URL。
+3. 与主机同一 Tailscale tailnet 的设备免凭据：打开 https://shang.tailc2493b.ts.net:18443/ （tailscale serve 反代，仅 tailnet 可达）或 http://<主机 tailnet IP>:18765/ ，即以 owner 身份使用；MCP 同理可用 `https://shang.tailc2493b.ts.net:18443/mcp` 且省去 Authorization 头。
+4. 不在 tailnet 里的局域网设备仍需凭据：在主机页面打开「协作与 Agent → 局域网连接凭据」，输入只读或编辑凭据。这是本终端的访问凭据，不是交易所账户。不要把凭据放进 URL。
 
 ## 行情如何更新
 
