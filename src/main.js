@@ -392,8 +392,13 @@ function registerLocalOverlays(){
 function drawingKey(){return `${state.symbol}|${state.interval}`;}
 function serializeDrawings(){
   if(!chart||!payload||restoringDrawings)return;
-  state.drawings[drawingKey()]=[...drawingIds].map(id=>chart.getOverlayById(id)).filter(overlay=>overlay&&overlay.id!==pendingDrawing&&!overlay.isDrawing?.()).map(overlay=>({id:overlay.id,name:overlay.name,points:overlay.points.map(({timestamp,dataIndex,value,xOffset})=>({...Number.isFinite(timestamp)?{timestamp}:{dataIndex},value,...(isFreehand(overlay.name)&&Number.isFinite(xOffset)?{xOffset}:{})})),...(overlay.styles?{styles:overlay.styles}:{}),...(overlay.extendData!==undefined?{extendData:overlay.extendData}:{}),visible:drawingVisibility.get(overlay.id)!==false,lock:overlay.lock,...(Number.isFinite(overlay.zLevel)?{zLevel:overlay.zLevel}:{})}));
-  const host=$('#chart');if(host)host.dataset.drawingCount=String(state.drawings[drawingKey()].length);
+  const myKey=drawingKey();
+  // Sibling-interval marks shown through from other intervals must not be
+  // re-saved under this interval — they already live in their own key.
+  const homeKeys=new Map();
+  for(const [key,list] of Object.entries(state.drawings))for(const d of list||[])homeKeys.set(d.id,key);
+  state.drawings[myKey]=[...drawingIds].map(id=>chart.getOverlayById(id)).filter(overlay=>overlay&&overlay.id!==pendingDrawing&&!overlay.isDrawing?.()&&(homeKeys.get(overlay.id)??myKey)===myKey).map(overlay=>({id:overlay.id,name:overlay.name,points:overlay.points.map(({timestamp,dataIndex,value,xOffset})=>({...Number.isFinite(timestamp)?{timestamp}:{dataIndex},value,...(isFreehand(overlay.name)&&Number.isFinite(xOffset)?{xOffset}:{})})),...(overlay.styles?{styles:overlay.styles}:{}),...(overlay.extendData!==undefined?{extendData:overlay.extendData}:{}),visible:drawingVisibility.get(overlay.id)!==false,lock:overlay.lock,...(Number.isFinite(overlay.zLevel)?{zLevel:overlay.zLevel}:{})}));
+  const host=$('#chart');if(host)host.dataset.drawingCount=String(state.drawings[myKey].length);
 }
 const drawingNames={...DRAWING_NAMES,simpleAnnotation:'文字'};
 const drawingIcons={...Object.fromEntries(DRAWING_TOOLS.map(tool=>[tool.name,tool.icon])),simpleAnnotation:'text'};
@@ -487,20 +492,52 @@ function drawingCallbacks(){return {
   ...drawingSelectionCallbacks(showSelection,hideSelection),
   onDrawEnd:({overlay})=>{if(restoringDrawings)return false;if(isPath(overlay.name)&&!normalizeFinishedPath(overlay))return false;commitFinishedDrawing(overlay);return false;},
   onPressedMoveEnd:()=>{commitDrawings();return false;},
-  onRemoved:({overlay})=>{if(restoringDrawings)return false;drawingIds.delete(overlay.id);drawingVisibility.delete(overlay.id);hideSelection(overlay.id);queueMicrotask(()=>{commitDrawings();renderDrawingTools();});return false;},
+  onRemoved:({overlay})=>{
+    if(restoringDrawings)return false;
+    drawingIds.delete(overlay.id);drawingVisibility.delete(overlay.id);hideSelection(overlay.id);
+    // Deleting a sibling-interval mark must remove it from its home key, or it
+    // reappears there on the next restore.
+    const home=drawingHomeKeys.get(overlay.id);
+    const id=overlay.id;
+    if(home&&home!==drawingKey())state.drawings[home]=(state.drawings[home]||[]).filter(d=>d.id!==id);
+    drawingHomeKeys.delete(id);
+    queueMicrotask(()=>{commitDrawings();renderDrawingTools();});
+    return false;
+  },
   onRightClick:event=>{if(isPath(event.overlay?.name)&&event.overlay.isDrawing?.()){drawingMenuFromOverlay=true;queueMicrotask(()=>{drawingMenuFromOverlay=false;});if(!finishActivePath())cancelDrawing();return true;}showSelection(event.overlay);drawingMenuFromOverlay=true;openChartMenu(event.pageX??event.x??0,event.pageY??event.y??0,'drawing');queueMicrotask(()=>{drawingMenuFromOverlay=false;});return true;},
   onDoubleClick:({overlay})=>{if(!overlay.isDrawing?.()){showSelection(overlay);openDrawingSettings();return true;}return false;},
 };}
 function restoreDrawings(){
-  const saved=structuredClone(state.drawings[drawingKey()]||[]),wanted=new Set(saved.map(d=>d.id));restoringDrawings=true;
+  const myKey=drawingKey(),saved=structuredClone(state.drawings[myKey]||[]),wanted=new Set(saved.map(d=>d.id));restoringDrawings=true;
+  drawingHomeKeys=new Map();
   try{
     for(const id of [...drawingIds])if(!wanted.has(id)&&id!==pendingDrawing){chart.removeOverlay(id);drawingIds.delete(id);}
-    for(const overlay of saved)if(getSupportedOverlays().includes(overlay.name)){
+    for(const overlay of saved){
+      drawingHomeKeys.set(overlay.id,myKey);
       drawingVisibility.set(overlay.id,overlay.visible!==false);
+      if(!getSupportedOverlays().includes(overlay.name))continue;
       const config={...overlay,groupId:'user-drawings',...drawingCallbacks(),lock:connection?.role==='reader'||overlay.lock,visible:!drawingsHidden&&overlay.visible!==false};
       const current=chart.getOverlayById(overlay.id);
       if(current&&current.name!==overlay.name)chart.removeOverlay(overlay.id);
       if(chart.getOverlayById(overlay.id))chart.overrideOverlay(config);else{const id=chart.createOverlay(config);if(id)drawingIds.add(id);}
+    }
+    // Sibling-interval marks: drawings saved under this symbol's OTHER intervals show
+    // through when every anchor carries an absolute timestamp (price lines, notes,
+    // positions). Index-anchored shapes only make sense on the interval they were
+    // drawn on, so they stay interval-local.
+    const prefix=`${state.symbol}|`;
+    for(const [key,list] of Object.entries(state.drawings)){
+      if(key===myKey||!key.startsWith(prefix))continue;
+      for(const overlay of list||[]){
+        const points=overlay.points||[];
+        if(!points.length||!points.every(p=>Number.isFinite(p.timestamp)))continue;
+        if(!getSupportedOverlays().includes(overlay.name))continue;
+        drawingHomeKeys.set(overlay.id,key);
+        drawingVisibility.set(overlay.id,overlay.visible!==false);
+        const config={...overlay,groupId:'user-drawings',...drawingCallbacks(),lock:connection?.role==='reader'||overlay.lock,visible:!drawingsHidden&&overlay.visible!==false};
+        const current=chart.getOverlayById(overlay.id);
+        if(chart.getOverlayById(overlay.id))chart.overrideOverlay(config);else{const id=chart.createOverlay(config);if(id)drawingIds.add(id);}
+      }
     }
   }finally{restoringDrawings=false;}
   drawSharedNotes();
@@ -696,7 +733,18 @@ function onFreehandUp(event){
 function mutateDrawings(action){
   if(!canEditDrawings()||!payload)return;
   cancelDrawing();restoringDrawings=true;
-  try{action();}finally{restoringDrawings=false;}
+  try{action();}finally{
+    // The engine suppresses onRemoved while restoringDrawings — sweep sibling
+    // deletions here: any tracing whose home is another interval but no longer
+    // exists on the chart must be dropped from that home key.
+    for(const [id,home] of [...drawingHomeKeys]){
+      if(!drawingIds.has(id)){
+        drawingHomeKeys.delete(id);
+        if(home&&home!==drawingKey())state.drawings[home]=(state.drawings[home]||[]).filter(d=>d.id!==id);
+      }
+    }
+    restoringDrawings=false;
+  }
   commitDrawings();renderDrawingTools();
 }
 function undoDrawings(redo=false){
@@ -712,8 +760,18 @@ function toggleDrawingVisibility(){
 }
 function removeSelectedDrawing(){
   if(!selectedDrawing)return;const id=selectedDrawing;
-  mutateDrawings(()=>{chart.removeOverlay(id);drawingIds.delete(id);drawingVisibility.delete(id);hideSelection();});
+  mutateDrawings(()=>{
+    chart.removeOverlay(id);drawingIds.delete(id);drawingVisibility.delete(id);hideSelection();
+    // A sibling-interval mark shown here lives under the interval it was drawn
+    // on; deleting it must remove it there, or it returns on the next restore.
+    const home=homeKeyOf(id);
+    if(home&&home!==drawingKey()){const list=state.drawings[home];const next=(list||[]).filter(d=>d.id!==id);state.drawings[home]=next;}
+  });
 }
+// The interval key a drawing was originally saved under. Sibling-interval marks
+// restored onto this chart keep their home key from the last-known snapshot.
+let drawingHomeKeys=new Map();
+function homeKeyOf(id){return drawingHomeKeys.get(id)||null;}
 function copySelectedDrawing(){cloneSelectedDrawing();}
 function cloneSelectedDrawing(){
   closeDrawingToolbarMenus();
