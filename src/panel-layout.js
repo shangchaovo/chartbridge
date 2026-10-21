@@ -1,5 +1,5 @@
-// Panel sizes are personal browser preferences, separate from the shared chart.
-export function initPanelLayout() {
+// Saved sizes are shared; each viewport clamps their presentation locally.
+export function initPanelLayout({storage=localStorage}={}) {
   const main = document.querySelector('.main-column');
   const workspace = document.querySelector('.workspace');
   const root = document.documentElement;
@@ -18,7 +18,7 @@ export function initPanelLayout() {
   ];
   for (const panel of panels) {
     const handle = document.getElementById(panel.id);
-    const stored = Number(localStorage.getItem(panel.key));
+    const stored = Number(storage.getItem(panel.key));
     panel.value = stored > 0 && Number.isFinite(stored) ? stored : panel.initial();
     const apply = value => {
       const [min, max] = panel.bounds();
@@ -29,8 +29,8 @@ export function initPanelLayout() {
       handle.setAttribute('aria-valuenow', String(Math.round(panel.value)));
       handle.setAttribute('aria-valuetext', `${Math.round(panel.value)} 像素`);
     };
-    const save = () => localStorage.setItem(panel.key, String(Math.round(panel.value)));
-    panel.refresh = () => apply(panel.value);
+    const save = () => storage.setItem(panel.key, String(Math.round(panel.value)));
+    panel.refresh = (reload=false) => {const stored=Number(storage.getItem(panel.key));apply(reload?(stored>0?stored:panel.initial()):panel.value);};
     let drag = null;
     const coordinate = event => panel.axis === 'y' ? event.clientY : event.clientX;
     const end = (cancel = false) => {
@@ -70,7 +70,7 @@ export function initPanelLayout() {
     });
     apply(panel.value);
   }
-  const refresh = () => panels.forEach(panel => panel.refresh());
+  const refresh = (reload=false) => panels.forEach(panel => panel.refresh(reload===true));
   const observer = new ResizeObserver(refresh);
   observer.observe(main);
   observer.observe(workspace);

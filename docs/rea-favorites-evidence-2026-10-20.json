@@ -1,0 +1,222 @@
+{
+  "date": "2026-10-20",
+  "tool": "rea-agents 6.5.0",
+  "official_reference": "https://www.tradingview.com/support/solutions/43000662392/",
+  "reference_reader": "agent-reach web route / Jina Reader",
+  "captures": [
+    {
+      "name": "lines",
+      "evidence_id": "ev_d8edb121661b534f33e8693379ecee422c5bbf19ae62178d08d40578e571acbd",
+      "request": "work/rea-favorites-20261020/lines-request.json",
+      "evidence": "work/rea-favorites-20261020/lines-evidence.json",
+      "browser": {
+        "mode": "connect",
+        "process_ownership": "external",
+        "cleanup": "disconnected-external",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "completeness": {
+        "status": "incomplete",
+        "equality_eligible": false,
+        "missing_sections": [
+          "action",
+          "events"
+        ],
+        "truncated_sections": []
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "open-target",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "chart-ready",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "open-lines",
+          "status": "failed",
+          "error": "locator.click: Timeout 10000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[aria-label=\"Trend line tools\"]')\u001b[22m\n"
+        }
+      ]
+    },
+    {
+      "name": "favorites-capture",
+      "evidence_id": "ev_1aef3e148c5ca1a1a5db87905ac96b1546d1e035bb85052b3bbe4e45473618b0",
+      "request": "work/rea-favorites-20261020/favorites-capture-request.json",
+      "evidence": "work/rea-favorites-20261020/favorites-capture-evidence.json",
+      "browser": {
+        "mode": "connect",
+        "process_ownership": "external",
+        "cleanup": "disconnected-external",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "completeness": {
+        "status": "incomplete",
+        "equality_eligible": false,
+        "missing_sections": [
+          "accessibility",
+          "action",
+          "dom",
+          "events",
+          "screenshot",
+          "url"
+        ],
+        "truncated_sections": []
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "open-target",
+          "status": "failed",
+          "error": "page.goto: net::ERR_CONNECTION_CLOSED at https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT\nCall log:\n\u001b[2m  - navigating to \"https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT\", waiting until \"domcontentloaded\"\u001b[22m\n"
+        },
+        {
+          "id": "chart-ready",
+          "status": "cancelled",
+          "error": "not executed after an earlier action failure"
+        },
+        {
+          "id": "open-lines",
+          "status": "cancelled",
+          "error": "not executed after an earlier action failure"
+        }
+      ]
+    },
+    {
+      "name": "menu-direct",
+      "evidence_id": "ev_ec5a0f7c5ec82be03f08ef3585382b45312e423262607ac65be4f70a62adad68",
+      "request": "work/rea-favorites-20261020/menu-direct-request.json",
+      "evidence": "work/rea-favorites-20261020/menu-direct-evidence.json",
+      "browser": {
+        "mode": "connect",
+        "process_ownership": "external",
+        "cleanup": "disconnected-external",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "completeness": {
+        "status": "incomplete",
+        "equality_eligible": false,
+        "missing_sections": [
+          "accessibility",
+          "action",
+          "dom",
+          "events",
+          "screenshot",
+          "url"
+        ],
+        "truncated_sections": []
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "open-target",
+          "status": "failed",
+          "error": "page.goto: net::ERR_CONNECTION_CLOSED at https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT\nCall log:\n\u001b[2m  - navigating to \"https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT\", waiting until \"domcontentloaded\"\u001b[22m\n"
+        },
+        {
+          "id": "chart-ready",
+          "status": "cancelled",
+          "error": "not executed after an earlier action failure"
+        },
+        {
+          "id": "open-lines",
+          "status": "cancelled",
+          "error": "not executed after an earlier action failure"
+        }
+      ]
+    },
+    {
+      "name": "help",
+      "evidence_id": "ev_d9c809659d7748764709f337cba67177acbd3639d2add3f7b13fa597069eec20",
+      "request": "work/rea-favorites-20261020/help-request.json",
+      "evidence": "work/rea-favorites-20261020/help-evidence.json",
+      "browser": {
+        "mode": "connect",
+        "process_ownership": "external",
+        "cleanup": "disconnected-external",
+        "product": "Chromium",
+        "version": "151.0.7922.34"
+      },
+      "completeness": {
+        "status": "incomplete",
+        "equality_eligible": false,
+        "missing_sections": [
+          "action",
+          "events"
+        ],
+        "truncated_sections": []
+      },
+      "steps": [
+        {
+          "id": "scenario_start",
+          "status": "completed",
+          "error": null
+        },
+        {
+          "id": "open-target",
+          "status": "failed",
+          "error": "page.goto: net::ERR_CONNECTION_CLOSED at https://www.tradingview.com/support/solutions/43000662392/\nCall log:\n\u001b[2m  - navigating to \"https://www.tradingview.com/support/solutions/43000662392/\", waiting until \"domcontentloaded\"\u001b[22m\n"
+        }
+      ]
+    }
+  ],
+  "observed": [
+    "The first chart capture loaded the public BTCUSDT chart and exposed Trend tools, Geometric shapes, and Forecasting and measurement tools in the drawing toolbar.",
+    "The old Trend line tools selector timed out. Corrected-selector attempts failed earlier at navigation with ERR_CONNECTION_CLOSED."
+  ],
+  "limits": [
+    "No successful native favorite-star click or floating-toolbar drag was captured in this run.",
+    "The local toolbar is an independent implementation based on the supplied image, the official help article and the existing drawing catalog.",
+    "Raw REA completeness flags are preserved; a completed local test is not evidence of TradingView behavioral equality."
+  ],
+  "local_verification": {
+    "build": "npm run build passed",
+    "unit_tests": {
+      "total": 210,
+      "passed": 210,
+      "failed": 0
+    },
+    "browser": {
+      "checks": [
+        "the default floating toolbar matches the eight tools in the supplied image",
+        "menu stars add/remove tools immediately without choosing a drawing or closing the menu",
+        "favorite tools draw on the real chart and participate in undo/redo",
+        "drag handle and keyboard movement save a clamped chart-relative position",
+        "favorites, position and real drawings survive refresh",
+        "sidebar star hides/shows the toolbar and keeps the visibility preference after refresh",
+        "390px layout keeps the grip reachable and scrolls long favorite lists without widening the chart",
+        "reader mode disables drawing while allowing personal favorite preferences",
+        "empty favorites stay empty on refresh and a new star reopens the bar inside chart bounds",
+        "invalid saved preferences recover to usable defaults"
+      ],
+      "errors": [],
+      "bad": [],
+      "source": "Existing real cached OHLCV; owned browser; isolated server at 18769; stream disabled for repeatability."
+    },
+    "script": "work/favorites-ui-check.mjs",
+    "screenshots": [
+      "work/favorites-ui-check/desktop.png",
+      "work/favorites-ui-check/favorites-menu.png",
+      "work/favorites-ui-check/mobile.png"
+    ]
+  }
+}

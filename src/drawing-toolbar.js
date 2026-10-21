@@ -3,7 +3,7 @@ import {DRAWING_GROUPS,DRAWING_TOOLS} from './drawing-catalog.js';
 const escape = text => String(text).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let menu=null,anchor=null;
 export function closeDrawingMenu() {menu?.remove();menu=null;anchor?.setAttribute('aria-expanded','false');anchor=null;}
-export function renderDrawingToolbar({host,active,choices,magnet,keepDrawing,locked,hidden,readonly,onSelect,onAction,shortcutFor}) {
+export function renderDrawingToolbar({host,active,choices,magnet,keepDrawing,locked,hidden,readonly,onSelect,onAction,shortcutFor,favorites=[],favoritesVisible=false,onFavorite}) {
   closeDrawingMenu();
   const shortcutText=(name,fallback)=>shortcutFor?shortcutFor(name):fallback;
   const control=(id,glyph,label,pressed=false,extra='')=>`<button type="button" id="${id}" class="${pressed?'active':''}" title="${label}" aria-label="${label}" aria-pressed="${pressed}" ${extra}>${icon(glyph)}</button>`;
@@ -17,6 +17,7 @@ export function renderDrawingToolbar({host,active,choices,magnet,keepDrawing,loc
     control('lock-tool',locked?'lock':'unlock',locked?'解锁全部画线':'锁定全部画线',locked,readonly?'disabled':'')+
     control('hide-drawings-tool',hidden?'eyeOff':'eye',hidden?'显示全部画线':'隐藏全部画线',hidden)+
     control('drawing-manager-tool','objects','图形对象管理')+
+    control('favorite-drawings-tool','star',favoritesVisible?'隐藏收藏工具栏':'显示收藏工具栏',favoritesVisible)+
     `<span class="tool-divider"></span>`+control('alert-tool','alert','警报')+
     control('shortcuts-tool','keyboard','快捷键说明')+
     control('delete-drawings','trash','清除当前图表画线 · 可撤销',false,readonly?'disabled':'');
@@ -27,11 +28,18 @@ export function renderDrawingToolbar({host,active,choices,magnet,keepDrawing,loc
     const group=DRAWING_GROUPS.find(item=>item.id===button.dataset.toolGroup);
     const isOpen=anchor===button;closeDrawingMenu();if(isOpen)return;
     menu=document.createElement('div');menu.className='drawing-flyout';menu.setAttribute('role','menu');menu.setAttribute('aria-label',group.label);
-    menu.innerHTML=`<div class="flyout-title">${group.label}</div>`+group.tools.map(([name,label,glyph,fallback])=>{const shortcut=shortcutText(name,fallback);return `<button type="button" role="menuitem" data-choose-tool="${name}" class="${name===active?'selected':''}" ${readonly?'disabled':''}>${icon(glyph)}<span>${escape(label)}</span>${shortcut?`<kbd>${escape(shortcut)}</kbd>`:''}</button>`;}).join('');
+    menu.innerHTML=`<div class="flyout-title">${group.label}</div>`+group.tools.map(([name,label,glyph,fallback])=>{const shortcut=shortcutText(name,fallback),saved=favorites.includes(name);return `<div class="drawing-tool-row" role="none"><button type="button" role="menuitem" data-choose-tool="${name}" class="${name===active?'selected':''}" ${readonly?'disabled':''}>${icon(glyph)}<span>${escape(label)}</span>${shortcut?`<kbd>${escape(shortcut)}</kbd>`:''}</button><button type="button" role="menuitemcheckbox" data-favorite-toggle="${name}" class="drawing-favorite-star ${saved?'favorited':''}" aria-checked="${saved}" aria-label="${saved?'取消收藏':'收藏'}：${escape(label)}" title="${saved?'取消收藏':'添加到收藏工具栏'}">${icon('star')}</button></div>`;}).join('');
     document.body.append(menu);anchor=button;button.setAttribute('aria-expanded','true');
     const rect=button.getBoundingClientRect();
     menu.style.left=`${rect.right+5}px`;menu.style.top=`${Math.max(8,Math.min(rect.top,innerHeight-menu.offsetHeight-8))}px`;
     menu.querySelectorAll('[data-choose-tool]').forEach(item=>item.onclick=()=>{const name=item.dataset.chooseTool;closeDrawingMenu();onSelect(name);});
+    menu.querySelectorAll('[data-favorite-toggle]').forEach(item=>item.onclick=()=>{
+      const name=item.dataset.favoriteToggle;
+      favorites=onFavorite?.(name)||favorites;
+      const saved=favorites.includes(name),label=DRAWING_TOOLS.find(tool=>tool.name===name).label;
+      item.classList.toggle('favorited',saved);item.setAttribute('aria-checked',String(saved));
+      item.setAttribute('aria-label',`${saved?'取消收藏':'收藏'}：${label}`);item.title=saved?'取消收藏':'添加到收藏工具栏';
+    });
     menu.addEventListener('keydown',event=>{
       const buttons=[...menu.querySelectorAll('button:not(:disabled)')],index=buttons.indexOf(document.activeElement);
       if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();buttons[event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length]?.focus();}
@@ -39,7 +47,7 @@ export function renderDrawingToolbar({host,active,choices,magnet,keepDrawing,loc
     });
     menu.querySelector('button:not(:disabled)')?.focus();
   });
-  for(const id of ['magnet-tool','keep-drawing-tool','lock-tool','hide-drawings-tool','drawing-manager-tool','alert-tool','shortcuts-tool','delete-drawings'])host.querySelector(`#${id}`).onclick=()=>onAction(id);
+  for(const id of ['magnet-tool','keep-drawing-tool','lock-tool','hide-drawings-tool','drawing-manager-tool','favorite-drawings-tool','alert-tool','shortcuts-tool','delete-drawings'])host.querySelector(`#${id}`).onclick=()=>onAction(id);
 }
 document.addEventListener('pointerdown',event=>{if(menu&&!menu.contains(event.target)&&!anchor?.contains(event.target))closeDrawingMenu();});
 window.addEventListener('resize',closeDrawingMenu);

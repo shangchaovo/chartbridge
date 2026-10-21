@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 import { chartStateFromWorkspace, CHART_FIELDS } from '../src/collab-state.js';
 import { SAVED_DRAWING_TYPES } from '../src/drawing-catalog.js';
 import { isFreehand, MAX_FREEHAND_POINTS } from '../src/freehand.js';
+import { isPath, MAX_PATH_POINTS, pathSettings } from '../src/path-drawing.js';
+import { CURVE_POINTS, curveSettings, isCurve } from '../src/curve-drawing.js';
 import { isPosition, positionSettings, positionLevels, calculatePosition } from '../src/position-risk.js';
 
 const intervals=new Set(['1m','5m','15m','30m','1h','4h','1d','1w']);
@@ -32,16 +34,27 @@ function checkField(field,value){
 function drawingKey(value){if(typeof value!=='string'||value.length>100)fail('画线的行情与周期无效。');const split=value.lastIndexOf('|');symbol(value.slice(0,split));if(split<1||!intervals.has(value.slice(split+1)))fail('画线的行情与周期无效。');return value;}
 function validateDrawing(value){
   if(!value||typeof value!=='object'||!overlays.has(value.name))fail('不支持该画线类型。');id(value.id,'画线 ID');
-  if(!Array.isArray(value.points)||!value.points.length||value.points.length>(isFreehand(value.name)?MAX_FREEHAND_POINTS:12))fail('画线锚点无效。');
+  const maxPoints=isFreehand(value.name)?MAX_FREEHAND_POINTS:isPath(value.name)?MAX_PATH_POINTS:12;
+  if(!Array.isArray(value.points)||value.points.length<(isPath(value.name)?2:1)||value.points.length>maxPoints)fail('画线锚点无效。');
   for(const p of value.points)if(!p||!finite(p.value)||(!finite(p.timestamp)&&!Number.isInteger(p.dataIndex)))fail('画线需要价格和时间或数据索引锚点。');
   for(const p of value.points)if(p.xOffset!==undefined&&(!isFreehand(value.name)||!finite(p.xOffset)||Math.abs(p.xOffset)>1))fail('画笔的横向偏移无效。');
+  let extendData=value.extendData;
   if(isPosition(value.name)){
     try{if(value.points.length!==3)throw new Error('仓位规划需要入场、止损、止盈三个锚点。');positionSettings(value.extendData||{});calculatePosition({direction:value.name==='longPosition'?'long':'short',...positionLevels(value.points),settings:value.extendData||{}});}catch(error){fail(error.message);}
+  }else if(value.name==='localPolyline'){
+    try{extendData=pathSettings(value.extendData);}catch(error){fail(error.message);}
+    if(extendData.closed&&value.points.length<3)fail('闭合折线至少需要 3 个锚点。');
+  }else if(isCurve(value.name)){
+    if(value.points.length!==CURVE_POINTS[value.name])fail(`该曲线需要 ${CURVE_POINTS[value.name]} 个锚点。`);
+    try{extendData=curveSettings(value.extendData,value.name);}catch(error){fail(error.message);}
+  }else if(value.name==='localPath'){
+    if(value.extendData!==undefined)fail('路径不使用附加参数。');
+    extendData=undefined;
   }else if(value.extendData!==undefined&&(typeof value.extendData!=='string'||value.extendData.length>1000))fail('画线标注文字无效。');
   if(value.visible!==undefined&&typeof value.visible!=='boolean')fail('画线显示状态无效。');
   if(value.zLevel!==undefined&&!finite(value.zLevel))fail('画线层级无效。');
   if(value.styles!==undefined&&value.styles!==null&&(typeof value.styles!=='object'||JSON.stringify(value.styles).length>8000))fail('画线样式无效。');
-  safeJson(value);return {id:value.id,name:value.name,points:value.points.map(p=>({...p})),...(value.styles!==undefined?{styles:value.styles}:{}),...(value.extendData!==undefined?{extendData:value.extendData}:{}),...(value.visible!==undefined?{visible:value.visible}:{}),...(value.zLevel!==undefined?{zLevel:value.zLevel}:{}),lock:Boolean(value.lock)};
+  safeJson(value);return {id:value.id,name:value.name,points:value.points.map(p=>({...p})),...(value.styles!==undefined?{styles:value.styles}:{}),...(extendData!==undefined?{extendData}:{}),...(value.visible!==undefined?{visible:value.visible}:{}),...(value.zLevel!==undefined?{zLevel:value.zLevel}:{}),lock:Boolean(value.lock)};
 }
 
 export class SharedCharts extends EventEmitter {

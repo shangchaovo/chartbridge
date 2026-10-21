@@ -4,13 +4,16 @@ import { createHash } from 'node:crypto';
 import { SYMBOL_CATALOG } from '../server/market-data.mjs';
 import { FUTURES_CATALOG } from '../server/public-feeds.mjs';
 import { mergeCatalog, enrichBinanceAssets } from '../server/public-catalog.mjs';
+import { openWorkspaceStore } from '../server/workspace-store.mjs';
+import { fileURLToPath } from 'node:url';
 
 const root = new URL('../src/assets/logos/', import.meta.url);
 await mkdir(root, { recursive: true });
 const read = async (url, fallback) => { try { return JSON.parse(await readFile(url, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return fallback; throw error; } };
 const live = await read(new URL('../data/public-catalog.json', import.meta.url), {});
 const imported = await read(new URL('../data/watchlist-instruments.json', import.meta.url), []);
-const workspace = await read(new URL('../data/workspace.json', import.meta.url), {});
+const workspaceStore=await openWorkspaceStore(fileURLToPath(new URL('../data/',import.meta.url)));
+const workspace=workspaceStore.read();workspaceStore.close();
 const old = await read(new URL('sources.json', root), { assets: [], symbols: {} });
 const assetSource = 'https://www.binance.com/bapi/asset/v2/public/asset/asset/get-all-asset';
 const assetResponse = await fetch(assetSource, { signal: AbortSignal.timeout(25000) });

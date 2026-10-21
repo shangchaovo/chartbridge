@@ -26,6 +26,7 @@ import { FREE_GOLD_SOURCES, FREE_GOLD_INTERVALS } from './free-gold.mjs';
 import { mergeWatchlist } from '../src/market-categories.js';
 import { mergeSavedWatchlist, validWatchlist } from '../src/watchlist-state.js';
 import { openWorkspaceStore } from './workspace-store.mjs';
+import {adoptWorkspaceSettings,patchWorkspaceSettings} from './workspace-settings.mjs';
 import { mergeAgentConfig, publicAgentStatus, requestAnnotations } from './agent-mark.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -80,6 +81,7 @@ const serveHosts=String(process.env.TERMINAL_SERVE_HOSTS||'').split(',').map(s=>
 const access=await createAccess(dataDir,port,host,serveHosts);
 const workspace=await openWorkspaceStore(dataDir);
 const charts=new SharedCharts(join(dataDir,'charts.sqlite'),workspace.read());
+workspace.setChartSource(()=>charts.get('main').state);
 const domesticFutures=process.env.TERMINAL_DOMESTIC_FUTURES==='1';
 const accounts=domesticFutures?await new AccountFeeds({root,dataDir}).init():null;
 const markets=createMarketScope({domesticFutures,accounts,publicCatalog:liveCatalog.catalog});
@@ -252,8 +254,26 @@ const server = http.createServer(async (req, res) => {
     }
     if(url.pathname==='/api/chart/operations'&&req.method==='POST')return json(res,200,charts.apply(room,await body(req),principal));
     if(url.pathname==='/api/chart/events'&&req.method==='GET'){
-      const initial=charts.get(room),send=eventStream(req,res);send('chart',initial);
-      const changed=event=>{if(event.roomId===room)send('chart',event);};charts.on('change',changed);res.once('close',()=>charts.off('change',changed));return;
+      // Subscribe before reading the initial snapshot so a commit in between is
+      // still delivered as a change event instead of falling into the gap.
+      const send=eventStream(req,res);let initial=null;
+      const changed=event=>{if(initial===null&&event.roomId===room){initial=event;}else if(event.roomId===room)send('chart',event);};
+      charts.on('change',changed);
+      initial=charts.get(room);send('chart',initial);
+      res.once('close',()=>charts.off('change',changed));return;
+    }
+    if(url.pathname==='/api/workspace-sync'&&req.method==='GET')return json(res,200,workspace.settings());
+    if(url.pathname==='/api/workspace-sync/events'&&req.method==='GET'){
+      const send=eventStream(req,res),changed=snapshot=>send('settings',snapshot);
+      workspace.on('settings',changed);const snapshot=workspace.settings();send('settings',snapshot);res.once('close',()=>workspace.off('settings',changed));return;
+    }
+    if(url.pathname==='/api/workspace-sync/adopt'&&req.method==='POST'){
+      const value=await body(req),snapshot=await enqueueState(()=>adoptWorkspaceSettings(workspace,value,principal));
+      refreshAlertDemand();return json(res,200,snapshot);
+    }
+    if(url.pathname==='/api/workspace-sync'&&req.method==='PATCH'){
+      const value=await body(req),snapshot=await enqueueState(()=>patchWorkspaceSettings(workspace,value,principal));
+      refreshAlertDemand();void priceAlerts.scan([...hub.quotes.values()]);return json(res,200,snapshot);
     }
     if(url.pathname==='/api/feeds/gold/free'){
       if(!principal.local)return json(res,403,{error:'请在本机页面配置免费黄金行情。'});
@@ -368,8 +388,12 @@ const server = http.createServer(async (req, res) => {
       let savedWatchlist;
       await enqueueState(async () => {
         const old = workspace.read();
+        // Older tabs still send entire workspaces. Once synchronized, those
+        // snapshots must not replace settings changed on an up-to-date terminal.
+        const shared=workspace.settings();
+        if(shared.initialized)Object.assign(next,shared.fields);
         if(next.watchlist!==undefined){
-          try{next.watchlist=mergeSavedWatchlist(watchlistBase||[],next.watchlist,old.watchlist||[]);}catch(error){throw Object.assign(error,{status:400});}
+          try{next.watchlist=validWatchlist(old.watchlist)?mergeSavedWatchlist(watchlistBase||[],next.watchlist,old.watchlist):next.watchlist;}catch(error){throw Object.assign(error,{status:400});}
         }
         workspace.write(mergeFiredAlerts(old,next));savedWatchlist=next.watchlist;
       });

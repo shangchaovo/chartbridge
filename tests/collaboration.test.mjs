@@ -61,3 +61,60 @@ test('initial server snapshot is isolated from browser draft mutation',()=>{
     assert.equal(client.base.state.notes.local,undefined);assert.equal(diffChartStates(client.base.state,state).length,1);client.close();
   }finally{if(OldEventSource===undefined)delete globalThis.EventSource;else globalThis.EventSource=OldEventSource;}
 });
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+test('read-only terminals never schedule chart writes',async()=>{
+  const charts=new SharedCharts(':memory:');let state=charts.get().state,firstCallAt=null;const started=Date.now();
+  const client=new ChartCollaboration({api:async(_path,options)=>{if(firstCallAt===null)firstCallAt=Date.now()-started;return charts.apply('main',JSON.parse(options.body),editor);},capture:()=>state,apply:next=>{state=next;},changed:()=>{},actor:{id:'human',name:'人'},canEdit:false});
+  try{
+    // Read-only terminals still push nothing; canEdit=false keeps the schedule guard honest.
+    client.base=charts.get();assert.equal(client.schedule(),undefined);assert.equal(firstCallAt,null);
+  }finally{client.close();charts.close();}
+});
+test('an editor burst flushes at the debounce, not the old 650ms, and never past maxWait',async()=>{
+  const charts=new SharedCharts(':memory:');let state=charts.get().state,firstCallAt=null;const started=Date.now();
+  const client=new ChartCollaboration({api:async(_path,options)=>{if(firstCallAt===null)firstCallAt=Date.now()-started;return charts.apply('main',JSON.parse(options.body),editor);},capture:()=>structuredClone(state),apply:next=>{state=next;},changed:()=>{},actor:{id:'human',name:'人'}});
+  try{
+    client.base=charts.get();
+    // Drag-like burst: an edit every 120ms for 900ms (longer than maxWaitMs=800).
+    for(let index=0;index<7;index++){
+      const key='BTCUSDT|1d',id=`drawing-${index}`;
+      state.drawings[key]=[...(state.drawings[key]||[]),{id,name:'horizontalStraightLine',points:[{timestamp:1000+index,value:100+index}]}];
+      client.schedule();
+      await sleep(120);
+    }
+    assert.ok(firstCallAt!==null,'连续画线期间必须已经发出保存。');
+    // Allow generous timer jitter — still far below the old silent-forever behavior —
+    // while staying tight enough that a debounce-only implementation cannot pass.
+    assert.ok(firstCallAt<=client.maxWaitMs+500,`首次保存应在 ${firstCallAt}ms 后发出（上限 ${client.maxWaitMs}ms 加时钟余量），而不是等防抖静默。`);
+    await client.flush();
+  }finally{client.close();charts.close();}
+});
+test('an edit racing an in-flight chart save is republished promptly after it settles',async()=>{
+  const charts=new SharedCharts(':memory:');let state=charts.get().state,externalCallAt=null;const started=Date.now();
+  let reply,saved;
+  const client=new ChartCollaboration({api:async(_path,options)=>{const result=charts.apply('main',JSON.parse(options.body),editor);if(result.revision===1){saved=result;return new Promise(resolve=>{reply=resolve;});}if(externalCallAt===null)externalCallAt=Date.now()-started;return result;},capture:()=>structuredClone(state),apply:next=>{state=next;},changed:()=>{},actor:{id:'human',name:'人'}});
+  try{
+    client.base=charts.get();
+    state.pineCode='human draft';const sending=client.flush();
+    state.notes.local={id:'local',symbol:'BTCUSDT',interval:'1m',text:'race edit'};
+    client.schedule();reply(saved);await sending;await new Promise(resolve=>setTimeout(resolve,20));
+    assert.ok(externalCallAt!==null,'保存结束后排队中的编辑必须重发。');
+    assert.ok(externalCallAt<300,`第二次保存应在 ${externalCallAt}ms 内发出，而不是再吃一轮防抖。`);
+  }finally{client.close();charts.close();}
+});
+test('reconnecting the chart SSE refetches the room snapshot',async()=>{
+  const charts=new SharedCharts(':memory:');let state=charts.get().state,fetched=0;
+  const OriginalEventSource=globalThis.EventSource;
+  globalThis.EventSource=class{addEventListener(){}close(){}};
+  const client=new ChartCollaboration({api:async()=>{
+    fetched++;return charts.get();
+  },capture:()=>structuredClone(state),apply:next=>{state=next;},changed:()=>{},actor:{id:'human',name:'人'}});
+  try{
+    client.start(charts.get());
+    charts.apply('main',{baseRevision:0,batchId:'remote-1',actor:{id:'agent-1',name:'Agent'},operations:[{type:'upsert_note',note:{id:'agent-note',symbol:'BTCUSDT',interval:'1m',text:'远程新增'}}]},editor);
+    client.events.onopen();for(let i=0;i<8;i++)await Promise.resolve();
+    assert.ok(state.notes['agent-note'],'重连后必须补拉断线期间的远程修改。');
+    assert.equal(client.base.revision,1,'重连补拉后基础版本必须推进。');
+    assert.equal(fetched,1,'实际 start 注册的 onopen 应触发一次补拉。');
+  }finally{client.close();charts.close();if(OriginalEventSource===undefined)delete globalThis.EventSource;else globalThis.EventSource=OriginalEventSource;}
+});

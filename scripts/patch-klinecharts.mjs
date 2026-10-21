@@ -15,10 +15,24 @@ export function patchKLineCharts(source) {
   const completeOnDoubleClick=`                if (overlay.isDrawing() && progressInstancePaneId === paneId) {
                     overlay.forceComplete();`;
   const placeAnchorOnDoubleClick=`                if (overlay.isDrawing() && progressInstancePaneId === paneId) {
-                    overlay.eventMoveForDrawing(_this._coordinateToPoint(overlay, event));
-                    overlay.nextStep();`;
+                    if (overlay.name === 'localPath' || overlay.name === 'localPolyline') {
+                        if (overlay.points.length > overlay.currentStep - 1) overlay.points.length = Math.max(0, overlay.currentStep - 1);
+                        overlay.forceComplete();
+                    } else {
+                        overlay.eventMoveForDrawing(_this._coordinateToPoint(overlay, event));
+                        overlay.nextStep();
+                    }`;
   if(normalized.split(completeOnDoubleClick).length!==2)throw new Error('KLineCharts drawing double-click handler changed; review the fixed-anchor patch.');
-  // All offered tools have a fixed number of anchors. A double-click must not
-  // finish a new tool with only one point when the preceding tool used that spot.
-  return normalized.replace(original,replacement).replace(completeOnDoubleClick,placeAnchorOnDoubleClick);
+  const finishLoadedPoints=`            if (points.length >= this.totalStep - 1) {
+                this.currentStep = OVERLAY_DRAW_STEP_FINISHED;
+                repeatTotalStep = this.totalStep - 1;
+            }`;
+  const finishPathPoints=`            if (points.length >= this.totalStep - 1 || this.name === 'localPath' || this.name === 'localPolyline') {
+                this.currentStep = OVERLAY_DRAW_STEP_FINISHED;
+                repeatTotalStep = points.length;
+            }`;
+  if(normalized.split(finishLoadedPoints).length!==2)throw new Error('KLineCharts setPoints changed; review the path-restore patch.');
+  // Fixed-anchor tools treat a double-click as one more anchor. Path and polyline
+  // still finish on that double-click, and restoring fewer anchors must not resume drawing.
+  return normalized.replace(original,replacement).replace(completeOnDoubleClick,placeAnchorOnDoubleClick).replace(finishLoadedPoints,finishPathPoints);
 }

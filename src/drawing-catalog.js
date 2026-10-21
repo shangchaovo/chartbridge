@@ -9,7 +9,7 @@ export const DRAWING_GROUPS = [
     ['crossLine','十字线','crosshair','Alt+C'],['parallelStraightLine','平行通道','channel','Alt+P'],['priceChannelLine','价格通道','channel','Alt+W'],
   ]},
   {id:'fibonacci',label:'斐波那契工具',icon:'fib',tools:[['fibonacciLine','斐波那契回撤','fib','Alt+F'],['fibExtension','趋势斐波那契扩展','fibExtension','Alt+Shift+F'],['fibTimeZones','斐波那契时间区间','fibTime']]},
-  {id:'shapes',label:'几何与自由绘制',icon:'rectangle',tools:[['localBrush','画笔','brush'],['localHighlighter','荧光笔','highlighter'],['rect','矩形','rectangle','Alt+Shift+R'],['localCircle','圆形','circle','Alt+O'],['localEllipse','椭圆','ellipse'],['localTriangle','三角形','triangle','Alt+Shift+O'],['arrowLine','箭头','arrow','Alt+Shift+A']]},
+  {id:'shapes',label:'几何与自由绘制',icon:'rectangle',tools:[['localBrush','画笔','brush'],['localHighlighter','荧光笔','highlighter'],['rect','矩形','rectangle','Alt+Shift+R'],['localPath','路径','path'],['localCircle','圆形','circle','Alt+O'],['localEllipse','椭圆','ellipse'],['localPolyline','折线','polyline'],['localTriangle','三角形','triangle','Alt+Shift+O'],['localArc','弧线','arc'],['localCurve','曲线','curve'],['localDoubleCurve','双曲线','doubleCurve'],['arrowLine','箭头','arrow','Alt+Shift+A']]},
   {id:'notes',label:'文字与价格标注',icon:'text',tools:[['localNote','文字标注','text','Alt+N'],['priceLine','价格线','priceTag','Alt+K'],['simpleTag','价格标签','tag','Alt+Shift+K']]},
   {id:'measure',label:'测量工具',icon:'ruler',tools:[['priceRange','价格区间','priceRange','Alt+U'],['dateRange','时间区间','dateRange','Alt+Shift+D'],['datePriceRange','时间与价格区间','ruler','Shift，再点两下']]},
   {id:'studies',label:'价格与量能分析',icon:'vwap',tools:[['anchoredVWAP','锚定 VWAP','vwap'],['fixedVolumeProfile','区间量能分布（K线估算）','volumeProfile'],['regressionChannel','线性回归通道','regression']]},

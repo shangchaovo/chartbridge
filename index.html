@@ -12,6 +12,7 @@
   <div id="app">
     <section class="chart-toolbar" aria-label="图表工具栏">
       <a class="brand" href="/" aria-label="ChartBridge 图桥 · 本地交易研究工作台"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 25h26M8 25V14M24 25V8M3 19l7-8 7 5L29 4"/></svg><span>图桥</span></a>
+      <button type="button" id="workspace-sync-button" class="workspace-sync-button" aria-label="多端同步" aria-haspopup="dialog" title="多端配置双向同步"><span class="sync-status-dot" aria-hidden="true"></span><span>多端同步</span></button>
       <button class="symbol-picker" id="symbol-picker"><span id="symbol-mark"></span><span id="symbol-label">BTCUSDT</span><span class="picker-search" aria-hidden="true"></span></button>
       <span class="divider"></span>
       <div class="periods" id="periods" role="group" aria-label="K线周期">
@@ -35,7 +36,7 @@
       <button type="button" id="toggle-watchlist" class="icon-button chrome-icon layout-toggle" aria-pressed="true" aria-controls="watchlist-panel" title="隐藏自选报价" aria-label="隐藏自选报价"></button>
       <button class="icon-button" id="layout-button" aria-label="切换双图布局" title="单图 / 双图"></button>
       <button class="icon-button" id="snapshot-button" aria-label="导出图表图片" title="保存图表图片"></button>
-      <button class="icon-button" id="chart-settings-button" aria-label="图表设置" title="图表设置"></button>
+      <button class="icon-button settings-toolbar-button" id="chart-settings-button" aria-label="图表设置" title="图表设置"></button>
       <button class="icon-button" id="fullscreen-button" aria-label="图表全屏" title="图表全屏"></button>
       <button class="icon-button chrome-icon" id="save-layout" title="保存布局 · Ctrl S" aria-label="保存布局"></button>
       <button class="icon-button chrome-icon" id="export-workspace" title="导出工作区" aria-label="导出工作区"></button>
@@ -50,7 +51,7 @@
           <button type="button" class="icon-button chrome-icon" id="drawing-settings" title="设置" aria-label="画线设置" aria-haspopup="dialog" aria-expanded="false"></button>
           <button type="button" class="icon-button chrome-icon hidden" id="drawing-edit-text" title="编辑文字" aria-label="编辑文字"></button>
           <button type="button" class="icon-button chrome-icon hidden" id="position-settings-button" title="仓位参数与盈亏比" aria-label="仓位参数与盈亏比"></button>
-          <label class="drawing-swatch" title="颜色"><input id="drawing-color" type="color" value="#2962ff" aria-label="画线颜色"></label>
+          <div id="drawing-colors"><input id="drawing-color" type="hidden" value="#2962ff"></div>
           <input id="drawing-width" type="range" min="1" max="4" step="1" value="1" title="粗细" aria-label="画线粗细">
           <button type="button" id="drawing-style-button" title="实线" aria-label="画线样式"></button>
           <select id="drawing-line-style" class="visually-hidden" tabindex="-1" aria-label="画线样式"><option value="solid">实线</option><option value="dashed">虚线</option></select>
@@ -132,7 +133,7 @@
           <div id="alerts-pane-list" class="alerts-pane" role="tabpanel"></div>
           <div id="alerts-pane-log" class="alerts-pane hidden" role="tabpanel"></div>
         </section>
-        <div class="watchlist-heading"><h2>自选表</h2><div class="watchlist-heading-actions"><button class="icon-button" id="add-watchlist" aria-label="添加自选"></button><button type="button" class="icon-button" id="hide-watchlist" aria-label="隐藏自选报价" title="隐藏自选报价"></button></div></div>
+        <div class="watchlist-heading"><h2>自选表 <span id="watchlist-count" class="watchlist-count" aria-label="当前分类自选数量">0</span></h2><div class="watchlist-heading-actions"><button class="icon-button" id="add-watchlist" aria-label="添加自选"></button><button type="button" class="icon-button" id="hide-watchlist" aria-label="隐藏自选报价" title="隐藏自选报价"></button></div></div>
         <div class="market-filters" id="market-filters"><button class="selected" data-market="all" aria-pressed="true">全部</button><button data-market="crypto" aria-pressed="false">加密</button><button data-market="us-binance" aria-pressed="false">币安美股</button><button data-market="us" aria-pressed="false">券商美股</button><button data-market="cn" aria-pressed="false">A股</button><button data-market="hk" aria-pressed="false">港股</button><button data-market="etf" aria-pressed="false">ETF</button><button data-market="forex" aria-pressed="false">外汇</button><button data-market="futures" aria-pressed="false">国际期货</button><button data-market="indices" aria-pressed="false">指数</button></div>
         <div class="watchlist-columns"><span>代码 / 名称</span><span>最近价格</span><span>涨跌幅</span></div>
         <div id="watchlist" class="watchlist"></div>

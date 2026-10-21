@@ -24,6 +24,20 @@ export function diffChartStates(base, next) {
   return operations;
 }
 
+// The acknowledgement of our own batch is a baseline, not a concurrent edit.
+// Apply only its submitted operations: a chart may require multiple 100-op batches.
+export function chartStateAfterOperations(base,operations){
+  const state=clone(base);
+  for(const operation of operations){
+    if(operation.type==='set_field')state[operation.field]=clone(operation.value);
+    else if(operation.type==='upsert_drawing'){const values=state.drawings[operation.key]||[];state.drawings[operation.key]=[...values.filter(d=>d.id!==operation.drawing.id),clone(operation.drawing)];}
+    else if(operation.type==='remove_drawing')state.drawings[operation.key]=(state.drawings[operation.key]||[]).filter(d=>d.id!==operation.id);
+    else if(operation.type==='upsert_note')state.notes[operation.note.id]=clone(operation.note);
+    else if(operation.type==='remove_note')delete state.notes[operation.id];
+  }
+  return state;
+}
+
 // Merge at field / drawing ID / note ID boundaries. A conflict keeps the local
 // draft visible and blocks publication until the human explicitly resolves it.
 export function mergeChartStates(base, local, remote) {

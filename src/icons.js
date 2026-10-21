@@ -1,4 +1,5 @@
 const paths = {
+  star: '<path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9z"/>',
   brush: '<path d="m14 4 6 6-10 10H4v-6zM11 7l6 6M4 20l3-3"/>',
   highlighter: '<path d="m14 3 7 7-9 9-7-7zM6 13l-3 5 3 3 5-3M3 22h13"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18M7 14h3M14 14h3M7 17h3"/>',
@@ -12,6 +13,11 @@ const paths = {
   vertical: '<path d="M12 3v18"/><circle cx="12" cy="8" r="2"/>',
   fib: '<path d="M4 4h16M4 9h16M4 14h16M4 20h16M5 20 19 4"/>',
   rectangle: '<rect x="4" y="5" width="16" height="14" rx="1"/>',
+  path: '<path d="m4 17 5-8 4 5 7-10"/><circle cx="4" cy="17" r="1.3"/><circle cx="9" cy="9" r="1.3"/><circle cx="13" cy="14" r="1.3"/><circle cx="20" cy="4" r="1.3"/>',
+  polyline: '<path d="m5 16 5-9 8 2-3 8z"/>',
+  arc: '<path d="M4 18a8 8 0 0 1 16 0"/><circle cx="4" cy="18" r="1.3"/><circle cx="12" cy="10" r="1.3"/><circle cx="20" cy="18" r="1.3"/>',
+  curve: '<path d="M4 18Q12 0 20 18"/><circle cx="4" cy="18" r="1.3"/><circle cx="20" cy="18" r="1.3"/>',
+  doubleCurve: '<path d="M3 15C8 0 16 24 21 9"/><circle cx="3" cy="15" r="1.3"/><circle cx="21" cy="9" r="1.3"/>',
   channel: '<path d="m3 17 16-12M5 21 16 9"/>',
   text: '<path d="M5 5h14M12 5v15M8 20h8"/>',
   magnet: '<path d="M5 4v10a7 7 0 0 0 14 0V4h-4v10a3 3 0 0 1-6 0V4zM5 9h4M15 9h4"/>',

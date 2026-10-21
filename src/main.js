@@ -16,24 +16,40 @@ import { importTradingViewConfig } from './tv-import.js';
 import { initPanelLayout } from './panel-layout.js';
 import { DRAWING_NAMES, DRAWING_TOOLS } from './drawing-catalog.js';
 import { DrawingHistory } from './drawing-history.js';
+import { drawingSelectionCallbacks } from './drawing-selection.js';
 import { registerChartOverlays } from './chart-overlays.js';
 import { registerPositionOverlays } from './position-overlays.js';
 import { positionCursor } from './position-geometry.js';
+import { registerRectangleOverlay, rectangleCursor } from './rectangle-overlays.js';
 import { isPosition, positionSettings } from './position-risk.js';
 import { mountPositionEditor } from './position-editor.js';
 import { registerStudyOverlays } from './study-overlays.js';
 import { renderDrawingToolbar, closeDrawingMenu, drawingChoice } from './drawing-toolbar.js';
+import { readDrawingFavorites, writeDrawingFavorites, mountDrawingFavorites } from './drawing-favorites.js';
 import { SHORTCUTS, MEASURE_GESTURE, matchShortcut, chordFromEvent, formatChord, shortcutConflict, loadShortcutOverrides, shortcutDisplay, toolShortcutLabel, eventMatches, SHORTCUT_STORAGE_KEY } from './shortcuts.js';
 import { INITIAL_BARS, HISTORY_PAGE, canLoadOlder, historyRequest, mergeOlderBars, historyHasMore, mergeRefresh } from './history-page.js';
 import { DEFAULT_CHART_PREFERENCES, loadChartPreferences, normalizeChartPreferences } from './chart-preferences.js';
 import { barCountdown, registerCountdownOverlay } from './bar-countdown.js';
 import { isFreehand, simplifyStroke, registerFreehandOverlays } from './freehand.js';
+import { finalizePathPoints, isPath, pathSettings, registerPathOverlays } from './path-drawing.js';
+import { curveSettings, isCurve, registerCurveOverlays } from './curve-drawing.js';
 import { mountDrawingEditor } from './drawing-editor.js';
+import { DEFAULT_DRAWING_COLOR, readDrawingColors, rememberDrawingColor, drawingColorStyles } from './drawing-colors.js';
+import { mountDrawingColorControl } from './color-picker.js';
 import { CHART_TIMEZONES, chartTimezone, timezoneLabel, chartDateTime, findChartBar } from './chart-time.js';
 import { alertStatus, isReachDirection, normalizePriceAlert } from './alerts.js';
 import { clampBox, readLegendPosition, writeLegendPosition, DRAWING_PANEL_STORAGE_KEY } from './chart-legend.js';
 import { replayDelay, replayStartCount, stepReplayCount } from './replay.js';
 import { MARKET_NAMES, MARKET_FILTERS, marketCategory, matchesMarket, usStockLabel, usStockPair, mergeWatchlist } from './market-categories.js';
+import { mergeSavedWatchlist, validWatchlist, readWatchlistBackup, writeWatchlistBackup } from './watchlist-state.js';
+import {WorkspaceSync} from './workspace-sync.js';
+import {SYNCED_STORAGE_KEYS,syncedStorage,storageSettings,workspaceSettings,sameSetting} from './workspace-settings.js';
+import { createUIMotion } from './ui-motion.js';
+
+let workspaceSync=null;
+const uiMotion = createUIMotion();
+const settingsStorage=syncedStorage(globalThis.localStorage,key=>workspaceSync?.schedule({preferenceKey:key}));
+const storedChoice=(key,choices,fallback)=>{const value=settingsStorage.getItem(key);return choices.includes(value)?value:fallback;};
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -59,23 +75,27 @@ const defaults = {
   backtestOptions:{strategy:'ema-cross',fast:12,slow:26,initialCapital:100000,feeBps:10,slippageBps:5},
 };
 let state = structuredClone(defaults);
-let catalog = [], chart, secondaryChart, payload, allCandles = [], activeTab = 'backtest', marketFilter = 'all';
+let workspaceWatchlistBase=[...defaults.watchlist],stateSave=Promise.resolve();
+let catalog = [], chart, secondaryChart, payload, allCandles = [], activeTab = storedChoice('shanhai-active-tab',['backtest','pine','data','collab','accounts'],'backtest'), marketFilter = settingsStorage.getItem('shanhai-market-filter')||'all';
 let secondaryPayload=null,secondaryLoadingId=0;
 let freehandDrag=null,freehandFrame=null;
 let refreshPanelLayout = () => {};
 let loadingId = 0, backtestResult = null, pineResult = null, replay = false, replaySelecting = false, replayCount = 0, replayTimer = null, replaySpeed = 1;
-let pineWorker = null, saveTimer = null, toastTimer, autoBusy = false, currentTool = '', magnet = 'normal', drawingsLocked = false, selectedDrawing = '';
-let pendingDrawing='',keepDrawing=localStorage.getItem('shanhai-keep-drawing')==='1',drawingsHidden=localStorage.getItem('shanhai-hide-drawings')==='1';
+let pineWorker = null, saveTimer = null, toastTimer, autoBusy = false, currentTool = '', magnet = storedChoice('shanhai-magnet',['normal','weak_magnet','strong_magnet'],'normal'), drawingsLocked = false, selectedDrawing = '';
+let pendingDrawing='',keepDrawing=settingsStorage.getItem('shanhai-keep-drawing')==='1',drawingsHidden=settingsStorage.getItem('shanhai-hide-drawings')==='1';
 const drawingHistory=new DrawingHistory(),drawingVisibility=new Map(),toolChoices={};
-const chartPreferences=loadChartPreferences(localStorage);
-try{Object.assign(toolChoices,JSON.parse(localStorage.getItem('shanhai-drawing-tools')||'{}'));}catch{}
+const drawingFavorites=readDrawingFavorites(settingsStorage);
+let drawingColors=readDrawingColors(settingsStorage),drawingColorControl=null;
+let favoritesToolbar=null;
+const chartPreferences=loadChartPreferences(settingsStorage);
+try{Object.assign(toolChoices,JSON.parse(settingsStorage.getItem('shanhai-drawing-tools')||'{}'));}catch{}
 let collaboration=null,connection=null,restoringDrawings=false,sharedApplying=false,liveMeta=null,streamState='connecting',gapRepair=null;
-let actorId=localStorage.getItem('shanhai-actor-id');if(!actorId){actorId=newId();localStorage.setItem('shanhai-actor-id',actorId);}
-const actor={id:actorId,name:localStorage.getItem('shanhai-actor-name')||'图表研究者'};
+let actorId=settingsStorage.getItem('shanhai-actor-id');if(!actorId){actorId=newId();settingsStorage.setItem('shanhai-actor-id',actorId);}
+const actor={id:actorId,name:settingsStorage.getItem('shanhai-actor-name')||'图表研究者'};
 const liveFeed=new LiveFeed({event:applyLiveEvent,status:updateLiveStatus});
 const quotes = new Map(), drawingIds = new Set(), subPanes = new Map();
 let chartClipboard=null,chartPointer={price:null,timestamp:null},plusCrosshairX=null,plusCrosshairPinned=false;
-let shortcutOverrides=loadShortcutOverrides(typeof localStorage==='undefined'?{getItem:()=>null}:localStorage);
+let shortcutOverrides=loadShortcutOverrides(typeof settingsStorage==='undefined'?{getItem:()=>null}:settingsStorage);
 let rebindingId=null;
 const SHIFT_MEASURE_ID='shift-measure';
 let shiftMeasureDrag=null,measureArmed=false,shiftHoldForMeasure=false,measurePhase='off',measureAnchor=null,measureClick=null,liveCrosshair=null;
@@ -98,13 +118,13 @@ function currentInstrument() { return catalog.find(item => item.symbol === state
 function visibleCandles() { return replay && !replaySelecting ? allCandles.slice(0,replayCount) : allCandles; }
 function closedCandles() { const values = visibleCandles(); return state.imports[state.symbol]||replay ? values : values.filter((bar,index)=>bar.closed===true||(bar.closed===undefined&&index<values.length-1)); }
 function chartColors() {
-  const css = getComputedStyle(document.body); return Object.fromEntries(['bg','line','text','muted','faint','accent','up','down','blue'].map(key => [key,css.getPropertyValue(`--${key}`).trim()]));
+  const css = getComputedStyle(document.body); return Object.fromEntries(['bg','line','grid','text','muted','faint','accent','up','down','blue'].map(key => [key,css.getPropertyValue(`--${key}`).trim()]));
 }
 function styleChart(target) {
   const c = chartColors();
   target.setStyles(state.theme === 'light' ? 'light' : 'dark');
   target.setStyles({
-    grid:{show:chartPreferences.grid,horizontal:{show:chartPreferences.grid,color:c.line,style:'solid'},vertical:{show:chartPreferences.grid,color:c.line,style:'solid'}},
+    grid:{show:chartPreferences.grid,horizontal:{show:chartPreferences.grid,color:c.grid,style:'solid'},vertical:{show:chartPreferences.grid,color:c.grid,style:'solid'}},
     candle:{type:state.chartType==='line'?'area':state.chartType,bar:{upColor:c.up,downColor:c.down,noChangeColor:c.muted,upBorderColor:c.up,downBorderColor:c.down,noChangeBorderColor:c.muted,upWickColor:c.up,downWickColor:c.down,noChangeWickColor:c.muted},area:{lineSize:2,lineColor:'#2962ff',backgroundColor:[{offset:0,color:state.chartType==='line'?'rgba(41,98,255,0)':state.theme==='light'?'rgba(41,98,255,.16)':'rgba(41,98,255,.28)'},{offset:1,color:'rgba(41,98,255,0)'}]},tooltip:{showRule:'none'},priceMark:{last:{upColor:c.up,downColor:c.down,noChangeColor:c.muted,text:{color:'#ffffff'}}}},
     indicator:{tooltip:{showRule:'follow_cross',text:{color:c.muted,size:11}},lines:[{color:'#2962ff',size:1.2},{color:'#ff9800',size:1.2},{color:'#e040fb',size:1.2}]},
     xAxis:{axisLine:{color:c.line},tickLine:{show:false},tickText:{color:c.muted,size:11}},
@@ -286,10 +306,11 @@ function renderHeader() {
   const watermark=document.querySelector('.chart-watermark');
   if(watermark)watermark.innerHTML=`${esc(state.symbol)}<span>${esc(payload?.meta.exchange||item.exchange||marketNames[item.market]||'')}</span>`;
   $('#last-price').textContent=fmt(quote?.price);$('#last-price').className=sign(quote?.change);
+  uiMotion.price($('#last-price'),quote?.price,`header:${state.symbol}:${state.interval}:${replay}`);
   $('#price-change').textContent=`${Number.isFinite(quote?.change)?(quote.change>=0?'+':'')+fmt(quote.change):'—'}  ${quotePct(quote?.changePercent)}`;
   $('#price-change').className=sign(quote?.change);
   renderOhlc(last);
-  $$('#periods button').forEach(button=>button.classList.toggle('selected',button.dataset.interval===state.interval));
+  $$('#periods button').forEach(button=>{const selected=button.dataset.interval===state.interval;button.classList.toggle('selected',selected);button.setAttribute('aria-pressed',String(selected));});
   const age=payload?.quote?.timestamp?Math.max(0,Date.now()-payload.quote.timestamp):null;
   $('#connection-status').textContent=replay?'历史回放':`${delayLabel(liveMeta||payload?.meta)}${age!==null?payload.quote.timestamp>Date.now()+5000?' · 源时间晚于本机':` · 报价距今 ${age<60000?Math.floor(age/1000)+'秒':Math.floor(age/60000)+'分钟'}`:''}`;
   $('#connection-dot').style.background=payload?.meta.cache==='stale'||age>20000||streamState==='reconnecting'?'#d5aa62':'';
@@ -298,10 +319,17 @@ function renderHeader() {
   $('#instrument-detail').innerHTML=`<h3>${esc(item.name)}</h3><div class="detail-price ${sign(quote?.change)}">${fmt(quote?.price)}</div><div class="detail-change ${sign(quote?.change)}">${quotePct(quote?.changePercent)} <span class="muted">${replay?'回放区间':quote?.changePeriod==='rolling-24h'?'24 小时':'源报价涨跌幅'}</span></div><div class="detail-stats"><div><label>区间最高</label><strong>${fmt(max)}</strong></div><div><label>区间最低</label><strong>${fmt(min)}</strong></div><div><label>载入 K 线</label><strong>${bars.length}</strong></div><div><label>起始交易日</label><strong>${first?shortDate(first.timestamp):'—'}</strong></div></div><p class="detail-source">${esc(liveMeta?.providerName||payload?.meta.providerName||'—')} · ${esc(delayLabel(liveMeta||payload?.meta))}<br>报价时间 ${esc(date(quote?.timestamp||last?.timestamp))}</p>`;
 }
 function renderWatchlist() {
+  const focused=document.activeElement?.closest('[data-watch]');
+  const focusedSymbol=focused?.dataset.watch,focusedRemove=document.activeElement?.hasAttribute('data-remove-watch');
+  $$('[data-market]').forEach(button=>{button.classList.toggle('selected',button.dataset.market===marketFilter);button.setAttribute('aria-pressed',String(button.dataset.market===marketFilter));});
   const list=state.watchlist.filter(enabledSymbol).map(symbol=>catalog.find(item=>item.symbol===symbol)||{symbol,name:symbol,market:state.imports[symbol]?'local':'us'}).filter(item=>matchesMarket(item,marketFilter));
+  $('#watchlist-count').textContent=String(list.length);
   $('#watchlist').innerHTML=list.length?list.map(item=>{const quote=quotes.get(item.symbol),label=usStockLabel(item),ticker=marketCategory(item)==='us-binance'?item.baseAsset||item.symbol.replace(/^BINANCE:/,'').replace(/(?:USDT|USDC|USD1)$/,''):item.symbol;return `<div class="watch-row ${item.symbol===state.symbol?'selected':''}" role="button" tabindex="0" draggable="true" data-watch="${esc(item.symbol)}" title="${esc([item.symbol,label,item.name].filter(Boolean).join(' · '))}"><span class="watch-name">${symbolMark(item.symbol)}<span><span class="ticker">${esc(ticker)}</span><span class="company">${label?`<span class="watch-market">${esc(label)}</span> · `:''}${esc(item.name)}</span></span></span><span class="watch-price ${sign(quote?.change)}">${fmt(quote?.price)}</span><span class="watch-change ${sign(quote?.change)}">${quotePct(quote?.changePercent)}</span><button class="remove-watch" data-remove-watch="${esc(item.symbol)}" aria-label="从自选移除 ${esc(item.symbol)}">×</button></div>`}).join(''):'<p class="search-hint" style="padding:15px">这个市场还没有自选，点右上角 + 添加。</p>';
   activateSymbolMarks($('#watchlist'));
   $$('[data-watch]').forEach(row=>{
+    row.setAttribute('aria-pressed',String(row.dataset.watch===state.symbol));
+    uiMotion.price(row.querySelector('.watch-price'),quotes.get(row.dataset.watch)?.price,`watch:${row.dataset.watch}`);
+    if(row.dataset.watch===focusedSymbol)(focusedRemove?row.querySelector('[data-remove-watch]'):row)?.focus({preventScroll:true});
     row.ondragstart=event=>{row.classList.add('dragging');event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',row.dataset.watch);};
     row.ondragover=event=>{event.preventDefault();row.classList.add('drag-over');};
     row.ondragleave=()=>row.classList.remove('drag-over');
@@ -314,7 +342,7 @@ function renderWatchlist() {
     };
     row.ondragend=()=>row.classList.remove('dragging');
     row.onclick=event=>{if(event.target.closest('[data-remove-watch]')||row.classList.contains('dragging'))return;selectSymbol(row.dataset.watch)};
-    row.onkeydown=event=>{if(event.key==='Enter')selectSymbol(row.dataset.watch)};
+    row.onkeydown=event=>{if(event.target===row&&(event.key==='Enter'||event.key===' ')){event.preventDefault();selectSymbol(row.dataset.watch);}};
     row.oncontextmenu=event=>{event.preventDefault();event.stopPropagation();openWatchMenu(event.clientX,event.clientY,row.dataset.watch);};
   });
   $$('[data-remove-watch]').forEach(button=>button.onclick=event=>{event.stopPropagation();state.watchlist=state.watchlist.filter(symbol=>symbol!==button.dataset.removeWatch);renderWatchlist();scheduleSave();});
@@ -327,16 +355,23 @@ async function refreshWatchlist() {
 }
 function registerLocalOverlays(){
   registerChartOverlays(registerOverlay);
-  registerPositionOverlays(registerOverlay,{
+  const drawingDragContext={
     mark:()=>payload?.quote?.price,selected:()=>selectedDrawing,select:showSelection,precision:()=>chart?.getPriceVolumePrecision().price??2,
+    hovered:()=>chart?.getChartStore?.().getOverlayStore().getHoverInstanceInfo().instance?.id,
+    reverse:()=>chartPreferences.reverse,
     repaint:()=>chart?.updatePane(1,'candle_pane'),cursor:value=>{if($('#chart'))$('#chart').style.cursor=value;},
     point:event=>chart?.convertFromPixel({x:event.x,y:event.y},{paneId:'candle_pane'}),
+    resolvePoints:points=>points.map(point=>({...point,dataIndex:chart.convertFromPixel({x:chart.convertToPixel(point,{paneId:'candle_pane'}).x},{paneId:'candle_pane'}).dataIndex})),
+    updatePoints:(id,points)=>{const data=chart.getDataList();chart.overrideOverlay({id,points:points.map(point=>{const next={...point},bar=data[point.dataIndex];if(!Number.isFinite(next.timestamp)&&bar)next.timestamp=bar.timestamp;return next;})});},
+  };
+  registerRectangleOverlay(registerOverlay,drawingDragContext);
+  registerPositionOverlays(registerOverlay,{
+    ...drawingDragContext,
     resolvePoints:points=>{
       const resolved=points.map(point=>({...point,dataIndex:chart.convertFromPixel({x:chart.convertToPixel(point,{paneId:'candle_pane'}).x},{paneId:'candle_pane'}).dataIndex}));
       if(resolved[0].dataIndex>resolved[2].dataIndex){const {timestamp,dataIndex}=resolved[0];Object.assign(resolved[0],{timestamp:resolved[2].timestamp,dataIndex:resolved[2].dataIndex});Object.assign(resolved[2],{timestamp,dataIndex});}
       return resolved;
     },
-    updatePoints:(id,points)=>{const data=chart.getDataList();chart.overrideOverlay({id,points:points.map(point=>{const next={...point},bar=data[point.dataIndex];if(bar)next.timestamp=bar.timestamp;else delete next.timestamp;return next;})});},
     initialGeometry:(point,direction,settings)=>{
       const coordinate=chart.convertToPixel(point,{paneId:'candle_pane'}),pane=chart.getDrawPaneById('candle_pane'),axis=pane.getAxisComponent(),bounds=pane.getMainWidget().getBounding();
       const half=Math.min(70,Math.max(12,Math.min(coordinate.y-28,bounds.height-coordinate.y-28)));
@@ -346,15 +381,12 @@ function registerLocalOverlays(){
     },
   });
   registerStudyOverlays(registerOverlay,{candles:visibleCandles});
+  registerPathOverlays(registerOverlay,{toPixel:point=>chart?.convertToPixel(point,{paneId:'candle_pane'})});
+  registerCurveOverlays(registerOverlay);
   registerOverlay({name:'localNote',totalStep:2,needDefaultPointFigure:true,createPointFigures:({overlay,coordinates})=>{
     const point=coordinates[0];if(!point)return [];
     const text=typeof overlay.extendData==='string'&&overlay.extendData?overlay.extendData:'标注';
     return [{type:'line',attrs:{coordinates:[{x:point.x,y:point.y},{x:point.x,y:point.y-36}]}},{type:'text',attrs:{x:point.x,y:point.y-40,text,align:'center',baseline:'bottom'}}];
-  }});
-  registerOverlay({name:'rect',totalStep:3,needDefaultPointFigure:true,createPointFigures:({coordinates,overlay})=>{
-    if(coordinates.length<2)return [];
-    const x=Math.min(coordinates[0].x,coordinates[1].x),y=Math.min(coordinates[0].y,coordinates[1].y);
-    return [{type:'rect',attrs:{x,y,width:Math.abs(coordinates[1].x-coordinates[0].x),height:Math.abs(coordinates[1].y-coordinates[0].y)},styles:{style:'stroke_fill',borderColor:overlay.styles?.line?.color||'#2962ff',borderSize:overlay.styles?.line?.size||1,color:'rgba(41,98,255,0.12)'}}];
   }});
 }
 function drawingKey(){return `${state.symbol}|${state.interval}`;}
@@ -365,13 +397,14 @@ function serializeDrawings(){
 }
 const drawingNames={...DRAWING_NAMES,simpleAnnotation:'文字'};
 const drawingIcons={...Object.fromEntries(DRAWING_TOOLS.map(tool=>[tool.name,tool.icon])),simpleAnnotation:'text'};
-function showSelection(overlay){
-  if(isPosition(overlay?.name)){
+function showSelection(overlay,syncCanvas=true){
+  if(syncCanvas&&(isPosition(overlay?.name)||overlay?.name==='rect')){
     // A drag can finish without a native click. Keep canvas and toolbar selection
     // together so clicking empty chart space also dismisses the position labels.
     const overlays=chart?.getChartStore?.().getOverlayStore();
-    if(overlays?.getClickInstanceInfo().instance?.id!==overlay.id)overlays?.setClickInstanceInfo({paneId:'candle_pane',instance:overlay,figureType:2,figureKey:'position-body',figureIndex:-1,attrsIndex:0},{});
+    if(overlays?.getClickInstanceInfo().instance?.id!==overlay.id)overlays?.setClickInstanceInfo({paneId:'candle_pane',instance:overlay,figureType:2,figureKey:overlay.name==='rect'?'rectangle-body':'position-body',figureIndex:-1,attrsIndex:0},{});
   }
+  if(selectedDrawing!==overlay?.id)drawingColorControl?.close();
   selectedDrawing=overlay?.id||'';
   const bar=$('#drawing-selection');if(!bar)return;
   bar.classList.toggle('position-selection',isPosition(overlay?.name));
@@ -382,12 +415,14 @@ function showSelection(overlay){
   label.innerHTML=icon(drawingIcons[overlay.name]||'rectangle');
   label.title=drawingName;label.setAttribute('aria-label',drawingName);
   const locked=overlay.lock===true;
-  $('#drawing-lock').innerHTML=icon(locked?'lock':'unlock');
+  $('#drawing-lock').innerHTML=icon(locked?'lock':'unlock')+(locked?'<span>解锁后调整</span>':'');
+  $('#drawing-lock').classList.toggle('drawing-unlock-action',locked);
   $('#drawing-lock').title=locked?'解锁这条画线':'锁定这条画线';
   $('#drawing-lock').setAttribute('aria-label',$('#drawing-lock').title);
   $('#drawing-lock').setAttribute('aria-pressed',String(locked));
-  const color=overlay.styles?.line?.color;
-  if(typeof color==='string'&&/^#[0-9a-f]{6}$/i.test(color))$('#drawing-color').value=color;
+  const color=overlay.styles?.line?.color||chart?.getStyles()?.overlay?.line?.color||DEFAULT_DRAWING_COLOR;
+  drawingColorControl?.setColor(color);
+  drawingColorControl?.setDisabled(connection?.role==='reader');
   $('#drawing-width').max=isFreehand(overlay.name)?'24':String(Math.max(4,overlay.styles?.line?.size||1));$('#drawing-width').value=String(overlay.styles?.line?.size||1);
   $('#drawing-line-style').value=overlay.styles?.line?.style||'solid';
   syncDrawingStyleButton();
@@ -395,29 +430,66 @@ function showSelection(overlay){
   $('#position-settings-button').classList.add('hidden');
   $('#position-settings-button').disabled=connection?.role==='reader';
   const host=$('#chart');if(host)host.dataset.selectedDrawing=selectedDrawing;
-  if(isPosition(overlay.name))chart?.updatePane(1,'candle_pane');
+  if(isPosition(overlay.name)||overlay.name==='rect')chart?.updatePane(1,'candle_pane');
   applyDrawingPanelPosition();
 }
 function hideSelection(id){
   if(id&&id!==selectedDrawing)return;
+  drawingColorControl?.close();
   selectedDrawing='';$('#drawing-selection')?.classList.add('hidden');
   const host=$('#chart');if(host)host.dataset.selectedDrawing='';
   chart?.updatePane(1,'candle_pane');
 }
 function placeOverlay(config){
-  const created=chart.createOverlay({groupId:'user-drawings',mode:magnet,...config,...drawingCallbacks()});
+  const styles=config.styles??(drawingColors.color?drawingColorStyles(drawingColors.color):undefined);
+  const created=chart.createOverlay({groupId:'user-drawings',mode:magnet,...config,...(styles?{styles}:{}),...drawingCallbacks()});
   const id=Array.isArray(created)?created[0]:created;
   if(id){drawingIds.add(id);drawingVisibility.set(id,config.visible!==false);if(drawingsHidden)chart.overrideOverlay({id,visible:false});}
   return id;
 }
+function commitFinishedDrawing(overlay){
+  if(restoringDrawings)return;
+  pendingDrawing='';drawingIds.add(overlay.id);const again=currentTool;
+  // The lock-all action applies to existing drawings. A newly drawn shape stays
+  // editable even when every older drawing happens to be locked.
+  currentTool='';$('#chart')?.classList.remove('freehand-ready');commitDrawings();
+  if(isPosition(overlay.name)||selectedDrawing===overlay.id)showSelection(chart.getOverlayById(overlay.id)||overlay);
+  renderDrawingTools();
+  if(keepDrawing&&again&&again!=='localNote')setTimeout(()=>beginDrawing(again,false),0);
+}
+function normalizeFinishedPath(overlay){
+  const settings=overlay.name==='localPolyline'?pathSettings(overlay.extendData):null;
+  const finalized=finalizePathPoints(overlay.points,{closed:Boolean(settings?.closed),dropLast:overlay._pathSnap===true});
+  overlay._pathSnap=false;
+  if(!finalized){
+    pendingDrawing='';currentTool='';
+    restoringDrawings=true;
+    try{chart.removeOverlay(overlay.id);drawingIds.delete(overlay.id);drawingVisibility.delete(overlay.id);}finally{restoringDrawings=false;}
+    renderDrawingTools();toast(`${drawingNames[overlay.name]||'图形'}至少需要两个节点。`);
+    return false;
+  }
+  const extendData=overlay.name==='localPolyline'?pathSettings({closed:finalized.closed,fill:settings.fill}):undefined;
+  chart.overrideOverlay({id:overlay.id,points:finalized.points,...(extendData?{extendData}:{})});
+  return true;
+}
+function finishActivePath(){
+  const overlay=pendingDrawing&&chart?.getOverlayById(pendingDrawing);
+  if(!overlay||!isPath(overlay.name)||!overlay.isDrawing?.())return false;
+  const drafted=finalizePathPoints(overlay.points.slice(0,Math.max(0,overlay.currentStep-1)));
+  if(!drafted)return false;
+  const extendData=overlay.name==='localPolyline'?pathSettings({closed:false,fill:pathSettings(overlay.extendData).fill}):undefined;
+  chart.overrideOverlay({id:overlay.id,points:drafted.points,...(extendData?{extendData}:{})});
+  chart.getChartStore().getOverlayStore().progressInstanceComplete();
+  commitFinishedDrawing(overlay);
+  return true;
+}
 function drawingCallbacks(){return {
-  onDrawEnd:({overlay})=>{if(restoringDrawings)return false;pendingDrawing='';drawingIds.add(overlay.id);const again=currentTool;if(drawingsLocked)chart.overrideOverlay({id:overlay.id,lock:true});currentTool='';commitDrawings();if(isPosition(overlay.name)||selectedDrawing===overlay.id)showSelection(chart.getOverlayById(overlay.id)||overlay);renderDrawingTools();if(keepDrawing&&again&&again!=='localNote')setTimeout(()=>beginDrawing(again,false),0);return false;},
+  ...drawingSelectionCallbacks(showSelection,hideSelection),
+  onDrawEnd:({overlay})=>{if(restoringDrawings)return false;if(isPath(overlay.name)&&!normalizeFinishedPath(overlay))return false;commitFinishedDrawing(overlay);return false;},
   onPressedMoveEnd:()=>{commitDrawings();return false;},
   onRemoved:({overlay})=>{if(restoringDrawings)return false;drawingIds.delete(overlay.id);drawingVisibility.delete(overlay.id);hideSelection(overlay.id);queueMicrotask(()=>{commitDrawings();renderDrawingTools();});return false;},
-  onRightClick:event=>{showSelection(event.overlay);drawingMenuFromOverlay=true;openChartMenu(event.pageX??event.x??0,event.pageY??event.y??0,'drawing');queueMicrotask(()=>{drawingMenuFromOverlay=false;});return true;},
+  onRightClick:event=>{if(isPath(event.overlay?.name)&&event.overlay.isDrawing?.()){drawingMenuFromOverlay=true;queueMicrotask(()=>{drawingMenuFromOverlay=false;});if(!finishActivePath())cancelDrawing();return true;}showSelection(event.overlay);drawingMenuFromOverlay=true;openChartMenu(event.pageX??event.x??0,event.pageY??event.y??0,'drawing');queueMicrotask(()=>{drawingMenuFromOverlay=false;});return true;},
   onDoubleClick:({overlay})=>{if(!overlay.isDrawing?.()){showSelection(overlay);openDrawingSettings();return true;}return false;},
-  onSelected:({overlay})=>{if(overlay.groupId==='user-drawings')showSelection(overlay);return false;},
-  onDeselected:({overlay})=>{hideSelection(overlay.id);return false;},
 };}
 function restoreDrawings(){
   const saved=structuredClone(state.drawings[drawingKey()]||[]),wanted=new Set(saved.map(d=>d.id));restoringDrawings=true;
@@ -435,11 +507,25 @@ function restoreDrawings(){
   updateDrawingActions();
   renderDrawingTools();
 }
-function scheduleSave(){if(sharedApplying)return;collaboration?.schedule();connectMarket();clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveState(false),800);}
+function backupWatchlist(){writeWatchlistBackup(settingsStorage,state.watchlist,{pending:Boolean(connection?.local)&&JSON.stringify(state.watchlist)!==JSON.stringify(workspaceWatchlistBase),base:workspaceWatchlistBase});}
+function scheduleSave(){if(sharedApplying)return;backupWatchlist();collaboration?.schedule();workspaceSync?.schedule();connectMarket();clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveState(false),800);}
 async function saveState(show=true){
-  serializeDrawings();
-  try{if(connection?.local)await api('/api/state',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});else localStorage.setItem('shanhai-workspace',JSON.stringify(state));await collaboration?.flush();if(show)toast(collaboration?.conflicts.length?'本地草稿已保存，请在协作面板处理冲突。':collaboration?.retryBatch?'本地草稿已保存，共享修改正在重试。':'工作区与协作图表已保存。');return true;}
-  catch(error){toast(`保存失败：${error.message}`);return false;}
+  serializeDrawings();backupWatchlist();
+  const snapshot=structuredClone(state),watchlistBase=[...workspaceWatchlistBase];
+  stateSave=stateSave.then(async()=>{
+    try{
+      if(workspaceSync?.base?.initialized){
+        if(!await workspaceSync.flush())throw new Error('多端配置尚未同步，已保留本地修改并自动重试。');
+      }else if(connection?.local){
+        const result=await api('/api/state',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...snapshot,watchlistBase})});
+        if(validWatchlist(result.watchlist)){
+          state.watchlist=mergeSavedWatchlist(snapshot.watchlist,state.watchlist,result.watchlist);workspaceWatchlistBase=[...result.watchlist];backupWatchlist();renderWatchlist();
+        }
+      }else settingsStorage.setItem('shanhai-workspace',JSON.stringify(snapshot));
+      await collaboration?.flush();if(show)toast(collaboration?.conflicts.length?'本地草稿已保存，请在协作面板处理冲突。':collaboration?.retryBatch?'本地草稿已保存，共享修改正在重试。':'工作区与协作图表已保存。');return true;
+    }catch(error){toast(`保存失败：${error.message}`);return false;}
+  });
+  return stateSave;
 }
 function removeComputed(){
   chart.removeOverlay({groupId:'backtest-signals'});chart.removeOverlay({groupId:'pine-signals'});
@@ -450,6 +536,7 @@ async function loadSymbol({refresh=false}={}){
   cancelDrawing();hideSelection();
   const id=++loadingId;const symbol=state.symbol,interval=state.interval;
   $('#connection-status').textContent='正在获取行情…';$('#chart-message').classList.remove('hidden');$('#chart-message').textContent=`正在获取 ${symbol} · ${interval.toUpperCase()} 的真实行情…`;
+  $('#chart-message').dataset.state='loading';$('#chart-area').setAttribute('aria-busy','true');
   payload=null;secondaryPayload=null;liveMeta=null;allCandles=[];liveFeed.close();removeComputed();chart.applyNewData([],false);secondaryChart?.applyNewData([],false);renderChartTime();if(['backtest','data','collab'].includes(activeTab))renderPanel();
   try{
     const value=state.imports[symbol]||await api(`/api/candles?${new URLSearchParams({symbol,interval,limit:String(INITIAL_BARS),...(refresh?{refresh:'1'}:{})})}`);
@@ -457,23 +544,27 @@ async function loadSymbol({refresh=false}={}){
     payload=value;allCandles=value.candles;quotes.set(symbol,value.quote);chart.setTimezone(chartTimezone(chartPreferences.timezone,value.meta.timezone));chart.setPriceVolumePrecision(allCandles.at(-1).close<1?6:allCandles.at(-1).close<10?4:2,0);
     chart.applyNewData(allCandles,canLoadOlder(allCandles,{imported:Boolean(state.imports[symbol])}));chart.setBarSpace(7.5);chart.scrollToRealTime();if(!refresh)resetPriceScale(chart);rememberAxis(chart);restoreDrawings();
     serializeDrawings();drawingHistory.observe(drawingKey(),state.drawings[drawingKey()]||[]);updateDrawingActions();syncAlertLines();
-    $('#chart-message').classList.add('hidden');renderHeader();renderWatchlist();refreshAgentButton();if(activeTab!=='accounts')renderPanel();
+    $('#chart-message').classList.add('hidden');$('#chart-message').dataset.state='ready';renderHeader();renderWatchlist();refreshAgentButton();if(activeTab!=='accounts')renderPanel();
     if(state.dual)loadSecondary();connectMarket();scheduleSave();
   }catch(error){
     if(id!==loadingId)return;
+    $('#chart-message').dataset.state='error';
     $('#chart-message').innerHTML=`${esc(error.message)}<br><button class="secondary" id="retry-feed">重试</button> <button class="secondary" id="import-feed">导入 CSV</button>${symbol.startsWith('PYTH:')?'<button class="primary" id="configure-pyth">配置 PYTH 授权</button>':''}`;
     $('#retry-feed').onclick=()=>loadSymbol({refresh:true});$('#import-feed').onclick=()=>$('#csv-file').click();
     $('#configure-pyth')?.addEventListener('click',openPythSettings);
     $('#connection-status').textContent='行情暂不可用';$('#instrument-meta').textContent=error.message;
     $('#last-price').textContent='—';$('#price-change').textContent='—';$('#data-status').textContent=`${symbol} · ${interval.toUpperCase()} · 暂无数据`;
     if(activeTab!=='accounts')renderPanel();
+  }finally{
+    if(id===loadingId)$('#chart-area').setAttribute('aria-busy','false');
   }
 }
 async function selectSymbol(symbol){
   if(symbol===state.symbol)return;
+  let watchlist;try{watchlist=mergeWatchlist(state.watchlist,[symbol]).watchlist;}catch(error){toast(error.message);return;}
   if(replay||replaySelecting)toast('切换标的，已退出 K 线回放。');serializeDrawings();exitReplay(false);stopPine();state.symbol=symbol;renderWatchlist();$('#symbol-label').textContent=symbol;
-  if(!state.watchlist.includes(symbol))state.watchlist.push(symbol);
-  await loadSymbol();
+  state.watchlist=watchlist;
+  renderWatchlist();const loading=loadSymbol();scheduleSave();await loading;
 }
 async function selectInterval(interval){
   if(interval===state.interval)return;
@@ -553,14 +644,17 @@ function beginDrawing(name,announce=true){
   if((state.drawings[drawingKey()]||[]).length>=200){toast('当前图表最多保存 200 个图形。');return;}
   let extendData;
   if(name==='localNote'){extendData=prompt('输入标注文字','关注价位');if(!extendData?.trim())return;extendData=extendData.trim().slice(0,1000);}
+  if(isCurve(name))extendData=curveSettings(undefined,name);
   if(isPosition(name)){
-    try{extendData=positionSettings(JSON.parse(localStorage.getItem('shanhai-position-defaults')||'{}'));}catch{extendData=positionSettings();}
-    if(!localStorage.getItem('shanhai-position-defaults'))extendData={...extendData,lotSize:currentInstrument().market==='crypto'?.001:1,tickSize:10**-(allCandles.at(-1).close<1?6:2)};
+    try{extendData=positionSettings(JSON.parse(settingsStorage.getItem('shanhai-position-defaults')||'{}'));}catch{extendData=positionSettings();}
+    if(!settingsStorage.getItem('shanhai-position-defaults'))extendData={...extendData,lotSize:currentInstrument().market==='crypto'?.001:1,tickSize:10**-(allCandles.at(-1).close<1?6:2)};
   }
   if(drawingsHidden)toggleDrawingVisibility();
-  const choice=drawingChoice(name);if(choice){toolChoices[choice.group]=name;localStorage.setItem('shanhai-drawing-tools',JSON.stringify(toolChoices));}
+  const choice=drawingChoice(name);if(choice){toolChoices[choice.group]=name;settingsStorage.setItem('shanhai-drawing-tools',JSON.stringify(toolChoices));}
   currentTool=name;pendingDrawing=isFreehand(name)?'':placeOverlay({name,...(extendData?{extendData}:{})});$('#chart').classList.toggle('freehand-ready',isFreehand(name));hidePricePlus();renderDrawingTools();
   if(isFreehand(name)){if(announce)toast(`${drawingNames[name]}：按住鼠标拖动绘制，松开完成；Esc 取消。`);return;}
+  if(isPath(name)){if(announce)toast(name==='localPolyline'?'折线：依次点击节点。点回起点闭合；双击、右键或 Esc 结束为开口。不足两个节点时取消。':'路径：依次点击节点，双击、右键或 Esc 结束。不足两个节点时取消。');return;}
+  if(isCurve(name)){if(announce)toast({localArc:'弧线：点击起点、终点，再点击弧线经过的位置；Esc 取消。',localCurve:'曲线：点击起点、终点，再点击控制点设定弯曲；Esc 取消。',localDoubleCurve:'双曲线：点击起点、终点，再依次点击两个控制点；Esc 取消。'}[name]);return;}
   if(announce)toast(isPosition(name)?'点击入场位置放置仓位；拖左侧手柄调止盈止损，右侧手柄调宽度，双击打开设置。':`${drawingNames[name]||name}：在图上点击放置锚点，Esc 取消。`);
 }
 function freehandSample(event){
@@ -593,7 +687,7 @@ function onFreehandUp(event){
   const sample=freehandSample(event);if(sample&&Math.hypot(sample.x-drag.samples.at(-1).x,sample.y-drag.samples.at(-1).y)>.2)drag.samples.push(sample);
   freehandDrag=null;pendingDrawing='';currentTool='';$('#chart').classList.remove('freehand-ready');
   if($('#chart').hasPointerCapture(event.pointerId))$('#chart').releasePointerCapture(event.pointerId);
-  chart.overrideOverlay({id:drag.id,points:simplifyStroke(drag.samples).map(sample=>sample.point),lock:drawingsLocked});
+  chart.overrideOverlay({id:drag.id,points:simplifyStroke(drag.samples).map(sample=>sample.point),lock:false});
   const completed=chart.getOverlayById(drag.id);
   chart.getChartStore().getOverlayStore().setClickInstanceInfo({paneId:'candle_pane',instance:completed,figureType:2,figureKey:'freehand-stroke',figureIndex:0,attrsIndex:0},{});
   commitDrawings();showSelection(completed);renderDrawingTools();
@@ -612,7 +706,7 @@ function undoDrawings(redo=false){
   if($('#drawing-object-list'))renderDrawingObjects();scheduleSave();
 }
 function toggleDrawingVisibility(){
-  drawingsHidden=!drawingsHidden;localStorage.setItem('shanhai-hide-drawings',drawingsHidden?'1':'0');
+  drawingsHidden=!drawingsHidden;settingsStorage.setItem('shanhai-hide-drawings',drawingsHidden?'1':'0');
   for(const id of drawingIds)chart.overrideOverlay({id,visible:!drawingsHidden&&drawingVisibility.get(id)!==false});
   if(drawingsHidden)hideSelection();renderDrawingTools();
 }
@@ -672,11 +766,11 @@ function openPositionEditor(id=selectedDrawing){
       if(current.name===name)chart.overrideOverlay({id,points,extendData:value.settings});
       else{const styles=structuredClone(current.styles);chart.removeOverlay(id);drawingIds.delete(id);placeOverlay({id,name,points,styles,extendData:value.settings,lock:current.lock,visible:drawingVisibility.get(id)!==false});}
     });
-    localStorage.setItem('shanhai-position-defaults',JSON.stringify(value.settings));
+    settingsStorage.setItem('shanhai-position-defaults',JSON.stringify(value.settings));
     showSelection(chart.getOverlayById(id));return true;
   };
   mountPositionEditor({container:$('#position-editor'),plan:overlay,mark:payload?.quote?.price,currency,
-    onCancel:()=>$('#modal').close(),onDefaults:settings=>{localStorage.setItem('shanhai-position-defaults',JSON.stringify(settings));toast('已保存为新建仓位的默认设置。');},
+    onCancel:()=>$('#modal').close(),onDefaults:settings=>{settingsStorage.setItem('shanhai-position-defaults',JSON.stringify(settings));toast('已保存为新建仓位的默认设置。');},
     onSave:value=>{if(apply(value)){$('#modal').close();toast('仓位计划已更新，盈亏比和数量按当前参数重算。');}},
     onExport:value=>downloadJson(`${state.symbol}-${value.direction}-仓位计划.json`,{schemaVersion:1,kind:'position-plan',symbol:state.symbol,interval:state.interval,currency,createdAt:new Date().toISOString(),...value,source:'chart-plan'}),
     onCopy:value=>copyText(`${state.symbol} ${value.direction==='long'?'多头':'空头'}仓位计划\n入场 ${value.entry} · 止损 ${value.stop} · 止盈 ${value.target}\n毛盈亏比 1:${value.metrics.grossRatio.toFixed(4)} · 净盈亏比 1:${value.metrics.netRatio.toFixed(4)}\n数量 ${value.metrics.quantity} · 风险 ${fmt(value.metrics.risk)} ${currency} · 收益 ${fmt(value.metrics.reward)} ${currency}\n费用 ${value.settings.feeBps} bp · 滑点 ${value.settings.slippageBps} bp · 乘数 ${value.settings.multiplier}`),
@@ -690,18 +784,33 @@ function openPositionEditor(id=selectedDrawing){
     },
   });
 }
+function renderFavoriteDrawings(){
+  favoritesToolbar??=mountDrawingFavorites({host:$('#chart-area'),onSelect:beginDrawing,onPosition:position=>{drawingFavorites.position=position;writeDrawingFavorites(settingsStorage,drawingFavorites);}});
+  favoritesToolbar.update({preferences:drawingFavorites,active:currentTool,readonly:connection?.role==='reader',shortcutFor:name=>toolShortcutLabel(name,shortcutOverrides)});
+  const button=$('#favorite-drawings-tool'),visible=drawingFavorites.visible&&drawingFavorites.tools.length>0;
+  if(button){const label=visible?'隐藏收藏工具栏':'显示收藏工具栏';button.classList.toggle('active',visible);button.setAttribute('aria-pressed',String(visible));button.setAttribute('aria-label',label);button.title=label;}
+}
+function toggleFavoriteDrawing(name){
+  if(drawingFavorites.tools.includes(name))drawingFavorites.tools=drawingFavorites.tools.filter(tool=>tool!==name);
+  else{drawingFavorites.tools.push(name);drawingFavorites.visible=true;}
+  writeDrawingFavorites(settingsStorage,drawingFavorites);renderFavoriteDrawings();return drawingFavorites.tools;
+}
 function renderDrawingTools(){
-  renderDrawingToolbar({host:$('#drawing-tools'),active:currentTool,choices:toolChoices,magnet,keepDrawing,locked:drawingsLocked,hidden:drawingsHidden,readonly:connection?.role==='reader',shortcutFor:name=>toolShortcutLabel(name,shortcutOverrides),onSelect:beginDrawing,onAction:id=>{
-    if(id==='magnet-tool'){magnet={normal:'weak_magnet',weak_magnet:'strong_magnet',strong_magnet:'normal'}[magnet];chart.overrideOverlay({groupId:'user-drawings',mode:magnet});renderDrawingTools();}
-    else if(id==='keep-drawing-tool'){keepDrawing=!keepDrawing;localStorage.setItem('shanhai-keep-drawing',keepDrawing?'1':'0');renderDrawingTools();}
+  renderDrawingToolbar({host:$('#drawing-tools'),active:currentTool,choices:toolChoices,magnet,keepDrawing,locked:drawingsLocked,hidden:drawingsHidden,readonly:connection?.role==='reader',favorites:drawingFavorites.tools,favoritesVisible:drawingFavorites.visible&&drawingFavorites.tools.length>0,onFavorite:toggleFavoriteDrawing,shortcutFor:name=>toolShortcutLabel(name,shortcutOverrides),onSelect:beginDrawing,onAction:id=>{
+    if(id==='magnet-tool'){magnet={normal:'weak_magnet',weak_magnet:'strong_magnet',strong_magnet:'normal'}[magnet];settingsStorage.setItem('shanhai-magnet',magnet);chart.overrideOverlay({groupId:'user-drawings',mode:magnet});renderDrawingTools();}
+    else if(id==='keep-drawing-tool'){keepDrawing=!keepDrawing;settingsStorage.setItem('shanhai-keep-drawing',keepDrawing?'1':'0');renderDrawingTools();}
     else if(id==='lock-tool')toggleAllDrawingLocks();
     else if(id==='hide-drawings-tool')toggleDrawingVisibility();
     else if(id==='drawing-manager-tool')openDrawingManager();
+    else if(id==='favorite-drawings-tool'){
+      if(!drawingFavorites.tools.length){toast('在绘图工具菜单中点击名称右侧的星标，即可添加到收藏工具栏。');return;}
+      drawingFavorites.visible=!drawingFavorites.visible;writeDrawingFavorites(settingsStorage,drawingFavorites);renderFavoriteDrawings();
+    }
     else if(id==='shortcuts-tool')openShortcuts();
     else if(id==='alert-tool')openAlerts();
     else if(id==='delete-drawings')mutateDrawings(()=>{chart.removeOverlay({groupId:'user-drawings'});drawingIds.clear();drawingVisibility.clear();hideSelection();});
   }});
-  updateDrawingActions();
+  renderFavoriteDrawings();updateDrawingActions();
 }
 function openDrawingManager(){
   cancelDrawing();serializeDrawings();
@@ -729,12 +838,12 @@ function openShortcuts(){
   const rows=[`<div class="gesture"><span>${esc(MEASURE_GESTURE.label)}</span><kbd title="测量手势，不能改为键盘快捷键">${esc(MEASURE_GESTURE.display)}</kbd></div>`].concat(SHORTCUTS.map(item=>`<div class="${rebindingId===item.id?'capturing':''}"><span>${esc(item.label)}</span><button type="button" class="shortcut-key" data-rebind="${esc(item.id)}" title="点击后按下新的快捷键">${esc(shortcutDisplay(item.id,shortcutOverrides))}</button></div>`));
   openModal('快捷键',`<div class="shortcut-list">${rows.join('')}</div><div class="shortcut-actions"><button type="button" class="quiet" id="reset-shortcuts">恢复默认</button><p class="search-hint" id="shortcut-capture" style="margin:0">${rebindingId?'请按新的快捷键':'点击键位后按下新的组合。Esc 取消修改。冲突时会提示，不会覆盖另一条。'}</p></div><p class="search-hint">输入框和编辑器保留原生编辑快捷键。Shift，再点两下是测量手势：按一次 Shift 后松手，在图上点起点，移动鼠标，再点终点。它不在键盘映射里。方向键平移，加号减号缩放，逗号和句号切换周期。</p>`);
   $$('[data-rebind]').forEach(button=>button.onclick=()=>{rebindingId=button.dataset.rebind;openShortcuts();});
-  $('#reset-shortcuts').onclick=()=>{shortcutOverrides={};rebindingId=null;localStorage.removeItem(SHORTCUT_STORAGE_KEY);renderDrawingTools();openShortcuts();toast('快捷键已恢复默认。');};
+  $('#reset-shortcuts').onclick=()=>{shortcutOverrides={};rebindingId=null;settingsStorage.removeItem(SHORTCUT_STORAGE_KEY);renderDrawingTools();openShortcuts();toast('快捷键已恢复默认。');};
   if(rebindingId)$('#shortcut-capture')?.focus?.();
 }
 function saveShortcutOverride(id,chord){
   shortcutOverrides={...shortcutOverrides,[id]:chord};
-  localStorage.setItem(SHORTCUT_STORAGE_KEY,JSON.stringify(shortcutOverrides));
+  settingsStorage.setItem(SHORTCUT_STORAGE_KEY,JSON.stringify(shortcutOverrides));
 }
 function pointAtClient(clientX,clientY){
   const root=chart?.getDom?.();
@@ -833,7 +942,7 @@ function onShiftMeasureUp(event){
 function applyChartPreferences(next){
   const resetScale=('scale' in next&&next.scale!==chartPreferences.scale)||('reverse' in next&&next.reverse!==chartPreferences.reverse);
   Object.assign(chartPreferences,normalizeChartPreferences({...chartPreferences,...next}));
-  localStorage.setItem('shanhai-chart-preferences',JSON.stringify(chartPreferences));
+  settingsStorage.setItem('shanhai-chart-preferences',JSON.stringify(chartPreferences));
   for(const target of [chart,secondaryChart])if(target){styleChart(target);if(resetScale)resetPriceScale(target);}
   renderChartTime();
 }
@@ -859,6 +968,9 @@ function openChartSettings(){
   openModal('图表设置',`<form id="chart-settings-form" class="chart-settings"><label>价格刻度<select name="scale" aria-label="价格刻度类型"><option value="normal" ${p.scale==='normal'?'selected':''}>线性</option><option value="log" ${p.scale==='log'?'selected':''}>对数</option><option value="percentage" ${p.scale==='percentage'?'selected':''}>百分比</option></select></label><label>图表时区<select name="timezone" aria-label="图表时区">${timezoneOptions()}</select></label>${[['grid','显示网格线'],['crosshair','显示十字光标'],['lastPrice','显示最新价标记'],['lastPriceLine','显示最新价线'],['countdown','当前 K 线结束倒计时'],['reverse','反转价格轴'],['watermark','显示图表水印']].map(([key,label])=>`<label class="setting-switch"><span>${label}</span><input type="checkbox" name="${key}" ${p[key]?'checked':''}></label>`).join('')}<div class="settings-actions"><button type="button" class="quiet" id="reset-chart-settings">恢复默认</button><button class="primary">应用设置</button></div></form><p class="search-hint">设置保存在本机，适用于主图和对照图。倒计时附在最新价标记下；回放、离线缓存、暂停更新或当前 K 线已结束时隐藏。延迟行情仅在周期大于延迟时显示；日线和周线需有已知收盘时间。</p>`);
   $('#chart-settings-form').onsubmit=event=>{event.preventDefault();const values=new FormData(event.target);applyChartPreferences({scale:values.get('scale'),timezone:values.get('timezone'),...Object.fromEntries(['grid','crosshair','lastPrice','lastPriceLine','countdown','reverse','watermark'].map(key=>[key,values.has(key)]))});$('#modal').close();};
   $('#reset-chart-settings').onclick=()=>{applyChartPreferences(DEFAULT_CHART_PREFERENCES);openChartSettings();};
+  $('#modal .search-hint').textContent='设置应用于主图和对照图。任意终端修改颜色、工具图标、自选、图表设置和布局后，都会同步到其他终端；同一项以最后保存的修改为准。';
+  $('#modal .modal-body').insertAdjacentHTML('afterbegin',workspaceSyncControls());
+  bindWorkspaceSyncControl();
 }
 async function toggleFullscreen(){
   closeChartMenu();
@@ -986,10 +1098,10 @@ function toggleCursorLock(timestamp){
   toast('已按时间锁定垂直光标线。');
 }
 const CHART_TEMPLATE_KEY='shanhai-chart-templates';
-function chartTemplates(){try{const value=JSON.parse(localStorage.getItem(CHART_TEMPLATE_KEY)||'[]');return Array.isArray(value)?value.filter(item=>item&&typeof item==='object'):[];}catch{return [];}}
+function chartTemplates(){try{const value=JSON.parse(settingsStorage.getItem(CHART_TEMPLATE_KEY)||'[]');return Array.isArray(value)?value.filter(item=>item&&typeof item==='object'):[];}catch{return [];}}
 function saveChartTemplate(){
   const template={savedAt:Date.now(),interval:state.interval,chartType:state.chartType,indicators:[...state.indicators],indicatorParams:plainClone(state.indicatorParams)||{},scale:chartPreferences.scale};
-  localStorage.setItem(CHART_TEMPLATE_KEY,JSON.stringify([template,...chartTemplates()].slice(0,12)));
+  settingsStorage.setItem(CHART_TEMPLATE_KEY,JSON.stringify([template,...chartTemplates()].slice(0,12)));
   toast('已把当前周期、图表类型、指标和价格刻度存为本机模板。');
 }
 async function applyLatestChartTemplate(){
@@ -1182,10 +1294,13 @@ function openCreateAlert(explicit){
   const input=$('#alert-form input[name="price"]');input?.focus();input?.select?.();
 }
 function updateSelectedStyle(){
-  const overlay=chart?.getOverlayById(selectedDrawing);if(!overlay)return;
+  const overlay=chart?.getOverlayById(selectedDrawing);if(!overlay||!canEditDrawings())return;
   const color=$('#drawing-color').value,size=Number($('#drawing-width').value)||1;
   const style=$('#drawing-line-style').value;
-  mutateDrawings(()=>chart.overrideOverlay({id:selectedDrawing,styles:{line:{color,size,style},rect:{borderColor:color,borderSize:size},text:{color},circle:{borderColor:color,borderSize:size}}}));
+  const styles=drawingColorStyles(color,overlay.styles);
+  styles.line={...styles.line,size,style};
+  for(const figure of ['rect','polygon','circle','arc'])styles[figure].borderSize=size;
+  mutateDrawings(()=>chart.overrideOverlay({id:selectedDrawing,styles}));
 }
 function openModal(title,body){
   $('#modal-content').innerHTML=`<div class="modal-header"><h2>${esc(title)}</h2><button id="close-modal" class="icon-button" aria-label="关闭">${icon('close')}</button></div><div class="modal-body">${body}</div>`;
@@ -1261,10 +1376,12 @@ function indicatorParameters(name){
 }
 
 function renderPanel(){
+  $$('[data-tab]').forEach(button=>{button.classList.toggle('selected',button.dataset.tab===activeTab);button.setAttribute('aria-selected',String(button.dataset.tab===activeTab));});
   if(activeTab==='backtest')renderBacktest();else if(activeTab==='pine')renderPine();else if(activeTab==='data')renderData();else if(activeTab==='collab')renderCollaboration();else if(activeTab==='accounts')mountAccountSettings({container:$('#panel-content'),api,esc,toast,connection,isActive:()=>activeTab==='accounts',updated:async()=>{catalog=(await api('/api/catalog')).results;renderWatchlist();}});
+  uiMotion.reveal($('#panel-content'),activeTab);
 }
 function applyResearchBody(){
-  const open=localStorage.getItem('shanhai-research-body')==='1';
+  const open=settingsStorage.getItem('shanhai-research-body')==='1';
   $('#research-dock')?.classList.toggle('body-open',open);
   $('#research-dock')?.setAttribute('data-open-tab',activeTab);
   document.body.classList.toggle('research-body-open',open);
@@ -1275,7 +1392,7 @@ function applyResearchBody(){
   }
 }
 function setResearchBody(open){
-  localStorage.setItem('shanhai-research-body',open?'1':'0');
+  settingsStorage.setItem('shanhai-research-body',open?'1':'0');
   applyResearchBody();
   requestAnimationFrame(()=>{refreshPanelLayout();chart?.resize();secondaryChart?.resize();});
 }
@@ -1285,7 +1402,7 @@ function setTab(tab){
   if(tab===activeTab&&open){setResearchBody(false);return;}
   if(moduleHidden)setModule('research',true);
   else setResearchBody(true);
-  activeTab=tab;$$('[data-tab]').forEach(button=>{button.classList.toggle('selected',button.dataset.tab===tab);button.setAttribute('aria-selected',String(button.dataset.tab===tab));});
+  activeTab=tab;settingsStorage.setItem('shanhai-active-tab',tab);$$('[data-tab]').forEach(button=>{button.classList.toggle('selected',button.dataset.tab===tab);button.setAttribute('aria-selected',String(button.dataset.tab===tab));});
   $('#research-dock')?.setAttribute('data-open-tab',tab);
   renderPanel();
 }
@@ -1549,6 +1666,82 @@ function updateLiveStatus(event){
     if(payload&&!replay)renderHeader();
   }
 }
+function captureWorkspaceSettings(){return {fields:workspaceSettings(state),preferences:storageSettings(settingsStorage)};}
+function loadSyncedPreferences(preferences){
+  for(const key of SYNCED_STORAGE_KEYS){const value=preferences[key];if(value==null)settingsStorage.removeItem(key);else settingsStorage.setItem(key,value);}
+  Object.assign(drawingFavorites,readDrawingFavorites(settingsStorage));
+  drawingColors=readDrawingColors(settingsStorage);
+  Object.assign(chartPreferences,loadChartPreferences(settingsStorage));
+  for(const key of Object.keys(toolChoices))delete toolChoices[key];
+  try{Object.assign(toolChoices,JSON.parse(settingsStorage.getItem('shanhai-drawing-tools')||'{}'));}catch{}
+  keepDrawing=settingsStorage.getItem('shanhai-keep-drawing')==='1';
+  drawingsHidden=settingsStorage.getItem('shanhai-hide-drawings')==='1';
+  shortcutOverrides=loadShortcutOverrides(settingsStorage);
+  magnet=storedChoice('shanhai-magnet',['normal','weak_magnet','strong_magnet'],'normal');
+  marketFilter=settingsStorage.getItem('shanhai-market-filter')||'all';
+  activeTab=storedChoice('shanhai-active-tab',connection?.features?.domesticFutures?['backtest','pine','data','collab','accounts']:['backtest','pine','data','collab'],'backtest');
+}
+function applyWorkspaceSettings(next){
+  if(!next.initialized)return;
+  const before=workspaceSettings(state),beforePrefs=storageSettings(settingsStorage),wasHidden=drawingsHidden,wasMagnet=magnet,previousTab=activeTab,previousFilter=marketFilter,priorApplying=sharedApplying;
+  sharedApplying=true;
+  try{
+    Object.assign(state,structuredClone(next.fields));loadSyncedPreferences(next.preferences);
+    const preferenceChanged=key=>beforePrefs[key]!==next.preferences[key];
+    if(before.theme!==state.theme)applyTheme();
+    if(preferenceChanged('shanhai-chart-preferences')){
+      for(const target of [chart,secondaryChart])if(target){styleChart(target);resetPriceScale(target);}
+      renderChartTime();
+    }
+    if(before.dual!==state.dual){const dual=state.dual;if(replay)exitReplay(false);state.dual=before.dual;toggleLayout();state.dual=dual;}
+    else if(state.dual&&before.secondaryInterval!==state.secondaryInterval){if($('#secondary-interval'))$('#secondary-interval').value=state.secondaryInterval;loadSecondary();}
+    if(wasHidden!==drawingsHidden){
+      for(const id of drawingIds)chart.overrideOverlay({id,visible:!drawingsHidden&&drawingVisibility.get(id)!==false});
+      if(drawingsHidden)hideSelection();
+    }
+    if(wasMagnet!==magnet)chart.overrideOverlay({groupId:'user-drawings',mode:magnet});
+    renderDrawingTools();applyDrawingPanelPosition();applyLayoutChrome();refreshPanelLayout(true);
+    if(!sameSetting(before.watchlist,state.watchlist)){
+      workspaceWatchlistBase=[...state.watchlist];backupWatchlist();renderWatchlist();refreshWatchlist();
+    }
+    if(previousFilter!==marketFilter){$$('[data-market]').forEach(button=>{button.classList.toggle('selected',button.dataset.market===marketFilter);button.setAttribute('aria-pressed',String(button.dataset.market===marketFilter));});renderWatchlist();}
+    if(!sameSetting(before.alerts,state.alerts)||before.alertLogClearedAt!==state.alertLogClearedAt){syncAlertLines();updateAlertCount();if($('#watchlist-panel')?.classList.contains('alerts-open'))renderAlerts();}
+    if(!sameSetting(before.imports,state.imports)){
+      for(const [symbol,value] of Object.entries(state.imports||{}))if(!catalog.some(item=>item.symbol===symbol))catalog.push({symbol,name:value.meta?.name||symbol,market:'local',exchange:'LOCAL'});
+      if(state.imports[state.symbol])loadSymbol();
+    }
+    if(previousTab!==activeTab||(!sameSetting(before.backtestOptions,state.backtestOptions)&&activeTab==='backtest'))renderPanel();
+    if($('#auto-refresh'))$('#auto-refresh').checked=state.autoRefresh;
+    connectMarket();if(payload)renderHeader();renderWorkspaceSyncStatus();
+  }finally{sharedApplying=priorApplying;}
+}
+function workspaceSyncControls(){
+  return `<section class="modal-section workspace-sync-settings"><h3>多端双向同步</h3><p id="workspace-sync-status" class="search-hint" role="status"></p><button type="button" class="secondary" id="adopt-workspace-settings">首次从此终端导入配置（请在 MacBook 上操作）</button></section>`;
+}
+function openWorkspaceSync(){
+  closeChartMenu();
+  openModal('多端同步',`${workspaceSyncControls()}<p class="search-hint">首次从 MacBook 导入现有配置。启用后，三个终端平等：任意终端修改颜色、收藏图标、自选或设置，都会自动同步到其余终端。同一项以最后保存的修改为准。</p><button type="button" class="secondary" id="open-general-chart-settings">打开图表设置</button>`);
+  bindWorkspaceSyncControl();$('#open-general-chart-settings').onclick=openChartSettings;
+}
+function renderWorkspaceSyncStatus(){
+  const host=$('#workspace-sync-status'),entry=$('#workspace-sync-button');
+  if(!workspaceSync){if(host)host.textContent='正在读取同步状态…';return;}
+  const sync=workspaceSync;
+  const message=!sync.base?.initialized?'首次请在 MacBook 的映射终端导入现有配置；启用后所有终端均可修改和同步。':`双向同步 · ${sync.status==='connected'?'已同步':sync.status==='saving'?'正在同步':sync.status==='reconnecting'?'断线重连中':sync.status} · r${sync.base.revision} · 任意终端可修改，同一项以最后保存为准`;
+  if(host)host.textContent=message;
+  if(entry){entry.dataset.syncState=sync.base?.initialized?sync.status:'uninitialized';entry.title=message;}
+  const button=$('#adopt-workspace-settings');if(button){button.disabled=connection?.role!=='owner'||sync.base?.initialized;button.textContent=sync.base?.initialized?'双向同步已启用':'首次从此终端导入配置（请在 MacBook 上操作）';}
+}
+function bindWorkspaceSyncControl(){
+  renderWorkspaceSyncStatus();const button=$('#adopt-workspace-settings');if(!button)return;
+  button.disabled=!workspaceSync||connection?.role!=='owner'||workspaceSync.base?.initialized;
+  button.onclick=async()=>{
+    button.disabled=true;
+    try{await collaboration?.flush();await workspaceSync.adopt('MacBook');toast('已导入 MacBook 当前配置，之后任意终端的修改都会双向同步。');}
+    catch(error){toast(`初始化同步失败：${error.message}`);}
+    finally{button.disabled=connection?.role!=='owner';renderWorkspaceSyncStatus();}
+  };
+}
 function applySharedChart(next){
   const changedView=next.symbol!==state.symbol||next.interval!==state.interval,oldCode=state.pineCode;
   sharedApplying=true;
@@ -1568,7 +1761,7 @@ function drawSharedNotes(){
 }
 function collaborationChanged(client){
   const pending=client.canEdit?diffChartStates(client.base.state,chartStateFromWorkspace(state)):[];
-  if(client.canEdit&&(pending.length||client.conflicts.length))localStorage.setItem('shanhai-chart-draft',JSON.stringify({base:client.base,local:chartStateFromWorkspace(state),conflicts:client.conflicts}));else localStorage.removeItem('shanhai-chart-draft');
+  if(client.canEdit&&(pending.length||client.conflicts.length))settingsStorage.setItem('shanhai-chart-draft',JSON.stringify({base:client.base,local:chartStateFromWorkspace(state),conflicts:client.conflicts}));else settingsStorage.removeItem('shanhai-chart-draft');
   const collabLabel=client.conflicts.length?'协作，有冲突':client.saving?'协作，正在保存':`协作，修订 ${client.base.revision}`;
   $('#collab-button').innerHTML=icon('users');$('#collab-button').title=collabLabel;$('#collab-button').setAttribute('aria-label',collabLabel);
   $('#collab-button').classList.toggle('has-conflict',Boolean(client.conflicts.length));
@@ -1578,13 +1771,15 @@ async function importWorkspace(next){
   if(connection?.role==='reader')throw new Error('导入共享图表需要编辑凭据。');
   let current=await api('/api/chart?room=main');const operations=diffChartStates(current.state,chartStateFromWorkspace(next));
   for(let index=0;index<operations.length;index+=100)current=await api('/api/chart/operations?room=main',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({baseRevision:current.revision,batchId:newId(),actor,operations:operations.slice(index,index+100)})});
-  if(connection.local)await api('/api/state',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(next)});else localStorage.setItem('shanhai-workspace',JSON.stringify(next));
-  localStorage.removeItem('shanhai-chart-draft');location.reload();
+  if(workspaceSync?.base?.initialized){Object.assign(state,workspaceSettings(next));await workspaceSync.flush();}
+  else if(connection.local)await api('/api/state',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...next,watchlistBase:workspaceWatchlistBase})});else settingsStorage.setItem('shanhai-workspace',JSON.stringify(next));
+  writeWatchlistBackup(settingsStorage,next.watchlist);
+  settingsStorage.removeItem('shanhai-chart-draft');location.reload();
 }
 function renderCollaboration(){
   const readonly=connection?.role==='reader';
   $('#panel-content').innerHTML=`<div class="collab-layout"><div><div id="collab-state"></div><form id="actor-form" class="collab-actor"><label>编辑者名称<input id="actor-name" aria-label="编辑者名称" maxlength="80" value="${esc(actor.name)}"></label><button class="secondary">更新名称</button>${connection?.local?'<button type="button" class="quiet" id="show-access">局域网连接凭据</button>':''}</form><form id="note-form"><label class="note-label">添加共享批注<textarea name="text" aria-label="共享批注内容" maxlength="2000" placeholder="记录观察、价位或让 Agent 参考的假设…" required ${readonly?'disabled':''}></textarea></label><div class="note-actions"><label><input type="checkbox" name="anchor" checked> 锚定当前最新 K 线与价格</label><button class="primary" ${readonly?'disabled':''}>发布批注</button></div></form><div id="shared-note-list"></div></div><div class="collab-guide"><h3>人和 Agent 共用一张图</h3><p>共享标的、周期、指标、画线、Pine 源码与批注。每次修改带版本号；发生冲突时保留你的草稿，等待合并。</p><p>局域网：${connection?.mode==='lan'?'已启用':'未开启；请使用局域网启动器'}</p>${(connection?.urls||[]).map(url=>`<p class="lan-url">${esc(url)}</p>`).join('')}<p>MCP 地址为上方主机地址加 <code>/mcp</code>。Agent 通过 Bearer 凭据接入，可读取行情、计算指标和运行基础回测；编辑凭据还可提交画线与批注。</p><div id="agent-research"></div><h3>最近修改</h3><div id="chart-history">读取中…</div></div></div>`;
-  $('#actor-form').onsubmit=event=>{event.preventDefault();actor.name=$('#actor-name').value.trim()||'图表研究者';localStorage.setItem('shanhai-actor-name',actor.name);toast('编辑者名称已更新。');};
+  $('#actor-form').onsubmit=event=>{event.preventDefault();actor.name=$('#actor-name').value.trim()||'图表研究者';settingsStorage.setItem('shanhai-actor-name',actor.name);toast('编辑者名称已更新。');};
   $('#note-form').onsubmit=event=>{event.preventDefault();if(readonly)return;const values=new FormData(event.target),last=allCandles.at(-1),note={id:newId(),symbol:state.symbol,interval:state.interval,text:String(values.get('text')).trim()};if(!note.text)return;if(values.has('anchor')&&last){note.timestamp=last.timestamp;note.price=payload?.quote.price||last.close;}state.notes[note.id]=note;event.target.reset();drawSharedNotes();scheduleSave();renderCollaborationStatus();};
   if($('#show-access'))$('#show-access').onclick=showAccess;
   mountAgentResearch({container:$('#agent-research'),api,context:{symbol:state.symbol,interval:state.interval,ready:Boolean(payload),backtestOptions:structuredClone(state.backtestOptions)},canEdit:!readonly,esc,toast,download,publish:note=>{const id=newId();state.notes[id]={id,...note};drawSharedNotes();scheduleSave();renderCollaborationStatus();}});
@@ -1630,7 +1825,7 @@ async function applyImportedConfig(result){
   const intervalChanged=result.interval&&result.interval!==state.interval;
   const symbolChanged=result.symbol&&result.symbol!==state.symbol;
   if(intervalChanged)state.interval=result.interval;
-  syncIndicators();renderWatchlist();
+  syncIndicators();renderWatchlist();scheduleSave();
   if(symbolChanged)await selectSymbol(result.symbol);
   else if(intervalChanged)await loadSymbol();
   else scheduleSave();
@@ -1676,7 +1871,7 @@ async function loadAgentStatus(){
   refreshAgentButton();
 }
 function applyLayoutChrome(){
-  const hidden=Object.fromEntries(layoutModules.map(([name,key])=>[name,localStorage.getItem(key)==='1']));
+  const hidden=Object.fromEntries(layoutModules.map(([name,key])=>[name,settingsStorage.getItem(key)==='1']));
   if(matchMedia('(max-width:800px)').matches&&!document.body.classList.contains('watchlist-mobile-open'))hidden.watchlist=true;
   for(const [name,,className] of layoutModules)document.body.classList.toggle(className,hidden[name]);
   document.body.classList.toggle('watchlist-visible',!hidden.watchlist);
@@ -1694,8 +1889,8 @@ function applyLayoutChrome(){
 function setModule(name,visible){
   const key=layoutModules.find(item=>item[0]===name)?.[1];if(!key)return;
   if(name==='watchlist'&&matchMedia('(max-width:800px)').matches)document.body.classList.toggle('watchlist-mobile-open',visible);
-  localStorage.setItem(key,visible?'0':'1');
-  if(name==='research'&&visible)localStorage.setItem('shanhai-research-body','1');
+  settingsStorage.setItem(key,visible?'0':'1');
+  if(name==='research'&&visible)settingsStorage.setItem('shanhai-research-body','1');
   applyLayoutChrome();
 }
 let drawingPanelDrag=null,armingPanelDrag=false;
@@ -1722,7 +1917,7 @@ function applyDrawingPanelPosition(){
   if(drawingPanelDrag)return;
   const bar=$('#drawing-selection');
   if(!bar||bar.classList.contains('hidden'))return;
-  placeDrawingPanel(readLegendPosition(localStorage));
+  placeDrawingPanel(readLegendPosition(settingsStorage));
 }
 function moveDrawingPanel(event){
   const bar=$('#drawing-selection');
@@ -1741,10 +1936,11 @@ function endDrawingPanelDrag(event){
   document.removeEventListener('pointerup',endDrawingPanelDrag,true);
   document.removeEventListener('pointercancel',endDrawingPanelDrag,true);
   bar?.classList.remove('dragging');
-  if(bar)writeLegendPosition(localStorage,{x:bar.offsetLeft,y:bar.offsetTop});
+  if(bar)writeLegendPosition(settingsStorage,{x:bar.offsetLeft,y:bar.offsetTop});
   if(pointerId!=null&&bar?.hasPointerCapture?.(pointerId))bar.releasePointerCapture(pointerId);
 }
 function closeDrawingToolbarMenus(){
+  drawingColorControl?.close();
   $('#drawing-more-menu')?.classList.add('hidden');
   $('#drawing-settings-pop')?.classList.add('hidden');
   $('#drawing-more')?.setAttribute('aria-expanded','false');
@@ -1769,11 +1965,13 @@ function openDrawingSettings(){
   const snapshot=value=>({name:value.name,points:plainClone(value.points).map(point=>{if(Number.isFinite(point.timestamp))delete point.dataIndex;return point;}),styles:plainClone(value.styles),extendData:plainClone(value.extendData),lock:value.lock});
   const original=snapshot(overlay),key=drawingKey();
   openModal(`${drawingNames[overlay.name]||overlay.name} · 设置`,'<div id="drawing-editor"></div>');
-  mountDrawingEditor({container:$('#drawing-editor'),original,timezone:chartTimezone(chartPreferences.timezone,payload?.meta.timezone),readonly:connection?.role==='reader',onCancel:()=>$('#modal').close(),onSave:patch=>{
+  mountDrawingEditor({container:$('#drawing-editor'),original,recentColors:()=>drawingColors.recent,timezone:chartTimezone(chartPreferences.timezone,payload?.meta.timezone),readonly:connection?.role==='reader',onCancel:()=>$('#modal').close(),onSave:(patch,{colorChanged})=>{
     if(!canEditDrawings())return;
     const current=chart.getOverlayById(overlay.id);
     if(key!==drawingKey()||!current||JSON.stringify(snapshot(current))!==JSON.stringify(original))throw new Error('图形在编辑期间已变化，请关闭窗口并重新打开设置。');
-    mutateDrawings(()=>chart.overrideOverlay({id:current.id,...patch}));showSelection(chart.getOverlayById(current.id));$('#modal').close();toast('绘图设置已更新。');
+    mutateDrawings(()=>chart.overrideOverlay({id:current.id,...patch}));
+    if(colorChanged)drawingColors=rememberDrawingColor(settingsStorage,drawingColors,patch.styles.line.color);
+    showSelection(chart.getOverlayById(current.id));$('#modal').close();toast('绘图设置已更新。');
   }});
 }
 function mountDrawingPanelDrag(){
@@ -1783,7 +1981,7 @@ function mountDrawingPanelDrag(){
   bar.dataset.bound='1';
   bar.addEventListener('pointerdown',event=>{
     if(event.button!==0)return;
-    if(event.target.closest('input,select,textarea,button,.drawing-floating-menu'))return;
+    if(event.target.closest('input,select,textarea,button,.drawing-floating-menu,[data-drawing-color-control]'))return;
     closeDrawingToolbarMenus();
     event.preventDefault();event.stopPropagation();
     drawingPanelDrag={pointerId:event.pointerId,x:event.clientX,y:event.clientY,left:bar.offsetLeft,top:bar.offsetTop};
@@ -1799,7 +1997,7 @@ function mountDrawingPanelDrag(){
   bar.addEventListener('pointerup',endDrawingPanelDrag);
   bar.addEventListener('pointercancel',endDrawingPanelDrag);
   bar.addEventListener('lostpointercapture',endDrawingPanelDrag);
-  $('#drawing-panel-reset').onclick=event=>{event.stopPropagation();if(drawingPanelDrag)return;localStorage.removeItem(DRAWING_PANEL_STORAGE_KEY);placeDrawingPanel({x:6,y:6});};
+  $('#drawing-panel-reset').onclick=event=>{event.stopPropagation();if(drawingPanelDrag)return;settingsStorage.removeItem(DRAWING_PANEL_STORAGE_KEY);placeDrawingPanel({x:6,y:6});};
 }
 function attachEvents(){
   mountDrawingPanelDrag();
@@ -1811,8 +2009,10 @@ function attachEvents(){
   for(const [scale,glyph] of [['normal','linear'],['log','log'],['percentage','percent']]){const button=$(`[data-price-scale="${scale}"]`);if(button)button.innerHTML=icon(glyph);}
   $('#layout-button').innerHTML=icon('layout');$('#snapshot-button').innerHTML=icon('camera');$('#add-watchlist').innerHTML=icon('plus');
   for(const [id,glyph] of [['undo-drawing','undo'],['redo-drawing','redo'],['chart-settings-button','settings'],['fullscreen-button','fullscreen']])$(`#${id}`).innerHTML=icon(glyph);
+  $('#chart-settings-button').insertAdjacentHTML('beforeend','<span>图表设置</span>');
   $('#undo-drawing').onclick=()=>undoDrawings();$('#redo-drawing').onclick=()=>undoDrawings(true);
   $('#chart-settings-button').onclick=openChartSettings;$('#fullscreen-button').onclick=toggleFullscreen;
+  $('#workspace-sync-button').onclick=openWorkspaceSync;
   $$('[data-price-scale]').forEach(button=>button.onclick=()=>applyChartPreferences({scale:button.dataset.priceScale}));
   $('#chart-type-button').onclick=event=>{const rect=event.currentTarget.getBoundingClientRect();openChartMenu(rect.left,rect.bottom+4,'type');};
   if(!$('#price-plus')){
@@ -1830,13 +2030,14 @@ function attachEvents(){
     };
   }
   $('#chart-area').addEventListener('pointermove',movePricePlus);
-  $('#chart').addEventListener('mousemove',()=>{const hover=chart?.getChartStore?.().getOverlayStore().getHoverInstanceInfo();$('#chart').style.cursor=isPosition(hover?.instance?.name)?positionCursor(hover.figureKey):'';});
+  $('#chart').addEventListener('mousemove',()=>{const hover=chart?.getChartStore?.().getOverlayStore().getHoverInstanceInfo();$('#chart').style.cursor=hover?.instance?.lock?'not-allowed':isPosition(hover?.instance?.name)?positionCursor(hover.figureKey):hover?.instance?.name==='rect'?rectangleCursor(hover.figureKey):'';});
   $('#chart').addEventListener('mouseleave',()=>{$('#chart').style.cursor='';});
   $('#chart-area').addEventListener('pointerleave',event=>{if(!event.relatedTarget?.closest?.('#price-plus'))hidePricePlus();});
   $('#chart-area').addEventListener('contextmenu',event=>{
     event.preventDefault();
     if(event.target.closest?.('#price-plus'))return;
     if(drawingMenuFromOverlay){drawingMenuFromOverlay=false;return;}
+    if(pendingDrawing&&isPath(chart?.getOverlayById(pendingDrawing)?.name)){if(!finishActivePath())cancelDrawing();return;}
     hidePricePlus();
     const box=$('#chart')?.getBoundingClientRect();
     const main=chart?.getDom?.('candle_pane','main')?.getBoundingClientRect();
@@ -1845,7 +2046,7 @@ function attachEvents(){
     const onTime=!onPrice&&!inCandle&&box&&event.clientY>box.bottom-24&&event.clientX<box.right-8;
     openChartMenu(event.clientX,event.clientY,onPrice?'price':onTime?'time':'chart');
   });
-  document.addEventListener('pointerdown',event=>{if(chartContextMenu&&!chartContextMenu.contains(event.target))closeChartMenu();if(!event.target.closest?.('#drawing-more,#drawing-more-menu,#drawing-settings,#drawing-settings-pop'))closeDrawingToolbarMenus();});
+  document.addEventListener('pointerdown',event=>{if(chartContextMenu&&!chartContextMenu.contains(event.target))closeChartMenu();if(!event.target.closest?.('#drawing-more,#drawing-more-menu,#drawing-settings,#drawing-settings-pop,[data-drawing-color-control]'))closeDrawingToolbarMenus();});
   window.addEventListener('resize',closeChartMenu);
   document.addEventListener('fullscreenchange',()=>{const full=Boolean(document.fullscreenElement);$('#fullscreen-button').classList.toggle('active',full);$('#fullscreen-button').title=full?'退出全屏':'图表全屏';$('#fullscreen-button').setAttribute('aria-label',$('#fullscreen-button').title);chart?.resize();secondaryChart?.resize();});
   $('#hide-research').innerHTML=icon('collapse');$('#hide-watchlist').innerHTML=icon('collapseRight');
@@ -1856,7 +2057,11 @@ function attachEvents(){
   $('#alerts-tab-log').onclick=()=>showAlertsWidget('log');
   $('#alerts-show-watchlist').onclick=()=>hideAlertsWidget();$('#research-button').onclick=openResearch;$('#collab-button').onclick=()=>setTab('collab');
   $('#theme-button').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();scheduleSave();};$('#save-layout').onclick=()=>saveState();$('#export-workspace').onclick=()=>{serializeDrawings();downloadJson('ChartBridge-工作区.json',state);};
-  $('#refresh-button').onclick=async()=>{await loadSymbol({refresh:true});refreshWatchlist();};$('#auto-refresh').checked=state.autoRefresh;$('#auto-refresh').onchange=event=>{state.autoRefresh=event.target.checked;connectMarket();renderHeader();scheduleSave();};
+  $('#refresh-button').onclick=async()=>{
+    const button=$('#refresh-button');button.disabled=true;button.setAttribute('aria-busy','true');
+    try{await loadSymbol({refresh:true});await refreshWatchlist();}
+    finally{button.disabled=false;button.setAttribute('aria-busy','false');}
+  };$('#auto-refresh').checked=state.autoRefresh;$('#auto-refresh').onchange=event=>{state.autoRefresh=event.target.checked;connectMarket();renderHeader();scheduleSave();};
   $$('#periods button').forEach(button=>button.onclick=()=>selectInterval(button.dataset.interval));$$('[data-tab]').forEach(button=>button.onclick=()=>setTab(button.dataset.tab));
   $('#chart-type').value=state.chartType;$('#chart-type').onchange=event=>{state.chartType=event.target.value;styleChart(chart);if(secondaryChart)styleChart(secondaryChart);scheduleSave();};$('#layout-button').onclick=toggleLayout;
   $('#snapshot-button').onclick=()=>{if(!allCandles.length)return;const a=document.createElement('a');a.href=chart.getConvertPictureUrl(true,'png',chartColors().bg);a.download=`${state.symbol}-${state.interval}.png`;a.click();};
@@ -1865,7 +2070,7 @@ function attachEvents(){
   $('#replay-speed').onchange=event=>{replaySpeed=Number(event.target.value)||1;if(replayTimer){stopReplayTimer();$('#replay-play').innerHTML=icon('pause');replayTimer=setInterval(()=>advanceReplay(1),replayDelay(replaySpeed));}};
   $('#replay-play').onclick=()=>{if(!replay||replaySelecting){toast('请先点击一根 K 线作为回放起点。');return;}if(replayTimer)stopReplayTimer();else{if(replayCount>=allCandles.length)replayCount=2;$('#replay-play').innerHTML=icon('pause');replayTimer=setInterval(()=>advanceReplay(1),replayDelay(replaySpeed));}};
   $('#replay-slider').oninput=event=>{if(!replay)return;stopReplayTimer();const next=Math.round(Number(event.target.value));if(next<2||next>allCandles.length)return;replaySelecting=false;replayCount=next;applyReplay();};
-  $$('[data-market]').forEach(button=>button.onclick=()=>{marketFilter=button.dataset.market;$$('[data-market]').forEach(item=>{item.classList.toggle('selected',item===button);item.setAttribute('aria-pressed',String(item===button));});renderWatchlist();});
+  $$('[data-market]').forEach(button=>button.onclick=()=>{marketFilter=button.dataset.market;settingsStorage.setItem('shanhai-market-filter',marketFilter);$$('[data-market]').forEach(item=>{item.classList.toggle('selected',item===button);item.setAttribute('aria-pressed',String(item===button));});renderWatchlist();});
   $$('[data-range]').forEach(button=>button.onclick=()=>{const bars=visibleCandles();if(!bars.length)return;const from=button.dataset.range==='all'?0:bars.findIndex(bar=>bar.timestamp>=bars.at(-1).timestamp-Number(button.dataset.range)*86400000);const count=Math.max(5,bars.length-Math.max(0,from));chart.setBarSpace(Math.max(1,Math.min(40,($('#chart').clientWidth-65)/count)));chart.scrollToRealTime();$$('[data-range]').forEach(item=>item.classList.toggle('selected',item===button));});
   $('#fit-button').onclick=fitChart;
   $('#timezone-label').onclick=openTimezoneSettings;
@@ -1887,7 +2092,12 @@ function attachEvents(){
   $('#drawing-front').onclick=()=>restackSelectedDrawing('front');
   $('#drawing-back').onclick=()=>restackSelectedDrawing('back');
   $('#position-settings-button').innerHTML=icon('settings');$('#position-settings-button').onclick=()=>openPositionEditor();
-  $('#drawing-color').oninput=updateSelectedStyle;$('#drawing-width').oninput=updateSelectedStyle;
+  $('#drawing-color').value=drawingColors.color||DEFAULT_DRAWING_COLOR;
+  drawingColorControl=mountDrawingColorControl({host:$('#drawing-colors'),input:$('#drawing-color'),recent:()=>drawingColors.recent,beforeOpen:closeDrawingToolbarMenus,onChange:color=>{
+    if(!selectedDrawing||!canEditDrawings())return;
+    updateSelectedStyle();drawingColors=rememberDrawingColor(settingsStorage,drawingColors,color);
+  }});
+  $('#drawing-width').oninput=updateSelectedStyle;
   $('#drawing-line-style').onchange=()=>{syncDrawingStyleButton();updateSelectedStyle();};
   $('#drawing-style-button').onclick=()=>{const select=$('#drawing-line-style');select.value=select.value==='dashed'?'solid':'dashed';select.onchange();};
   $('#agent-key').oninput=refreshAgentButton;
@@ -1935,7 +2145,7 @@ function attachEvents(){
     if($('#modal').open&&action!=='save'&&action!=='escape')return;
     const tools={trend:'segment',horizontal:'horizontalStraightLine',vertical:'verticalStraightLine',cross:'crossLine',fib:'fibonacciLine',rect:'rect',note:'localNote',ray:'rayLine',extended:'straightLine','horizontal-ray':'horizontalRayLine','horizontal-segment':'horizontalSegment',channel:'parallelStraightLine','price-channel':'priceChannelLine','fib-extension':'fibExtension',circle:'localCircle',triangle:'localTriangle',arrow:'arrowLine','price-line':'priceLine','price-tag':'simpleTag','price-range':'priceRange','date-range':'dateRange'};
     if(action==='save'){event.preventDefault();saveState();return;}
-    if(action==='escape'){if($('#modal').open)$('#modal').close();closeChartMenu();cancelDrawing();hideSelection();return;}
+    if(action==='escape'){if($('#modal').open)$('#modal').close();closeChartMenu();if(!finishActivePath()){cancelDrawing();hideSelection();}return;}
     event.preventDefault();
     if(action==='undo')undoDrawings();
     else if(action==='redo')undoDrawings(true);
@@ -1964,14 +2174,31 @@ function attachEvents(){
 }
 async function boot(){
   try{
-    connection=await api('/api/connection');$('[data-tab="accounts"]').classList.toggle('hidden',!connection.features?.domesticFutures);const [hostSaved,list,snapshot]=await Promise.all([api('/api/state'),api('/api/catalog'),api('/api/chart?room=main')]);let saved=hostSaved;if(!connection.local)try{saved=JSON.parse(localStorage.getItem('shanhai-workspace')||'{}');}catch{}if(saved.schemaVersion)try{state=validateState(saved);}catch(error){toast(`保存的工作区有异常，已使用默认布局：${error.message}`);}Object.assign(state,structuredClone(snapshot.state));if(Array.isArray(state.alerts))state.alerts=state.alerts.map(alert=>normalizePriceAlert(alert));catalog=list.results;
+    connection=await api('/api/connection');$('[data-tab="accounts"]').classList.toggle('hidden',!connection.features?.domesticFutures);
+    const [hostSaved,list,snapshot,settingsSnapshot]=await Promise.all([api('/api/state'),api('/api/catalog'),api('/api/chart?room=main'),api('/api/workspace-sync')]);
+    let saved=hostSaved;if(!connection.local)try{saved=JSON.parse(settingsStorage.getItem('shanhai-workspace')||'{}');}catch{}
+    if(saved?.schemaVersion)try{state=validateState(saved);}catch(error){toast(`保存的工作区有异常，已使用默认布局：${error.message}`);}
+    if(validWatchlist(saved?.watchlist))state.watchlist=[...saved.watchlist];
+    workspaceWatchlistBase=validWatchlist(hostSaved.watchlist)?[...hostSaved.watchlist]:[...state.watchlist];
+    const watchlistBackup=readWatchlistBackup(settingsStorage);
+    if(watchlistBackup&&(!connection.local||!validWatchlist(hostSaved.watchlist)))state.watchlist=[...watchlistBackup.watchlist];
+    else if(watchlistBackup?.pending)state.watchlist=validWatchlist(watchlistBackup.base)?mergeSavedWatchlist(watchlistBackup.base,watchlistBackup.watchlist,state.watchlist):[...watchlistBackup.watchlist];
+    if(settingsSnapshot.initialized){Object.assign(state,structuredClone(settingsSnapshot.fields));loadSyncedPreferences(settingsSnapshot.preferences);workspaceWatchlistBase=[...state.watchlist];}
+    backupWatchlist();
+    Object.assign(state,structuredClone(snapshot.state));if(Array.isArray(state.alerts))state.alerts=state.alerts.map(alert=>normalizePriceAlert(alert));catalog=list.results;
     for(const [symbol,value] of Object.entries(state.imports))catalog.push({symbol,name:value.meta?.name||symbol,market:'local',exchange:'LOCAL'});
-    const dual=state.dual;state.dual=false;applyLayoutChrome();applyTheme();setupChart();renderDrawingTools();attachEvents();refreshPanelLayout=initPanelLayout();renderWatchlist();renderPanel();await loadAgentStatus();await loadSymbol();if(dual)toggleLayout();
+    const dual=state.dual;state.dual=false;applyLayoutChrome();applyTheme();setupChart();renderDrawingTools();attachEvents();refreshPanelLayout=initPanelLayout({storage:settingsStorage});renderWatchlist();renderPanel();await loadAgentStatus();await loadSymbol();if(dual)toggleLayout();
     collaboration=new ChartCollaboration({api,capture:()=>{serializeDrawings();return state;},apply:applySharedChart,changed:collaborationChanged,actor,canEdit:connection.role!=='reader'});
-    let draft;try{draft=JSON.parse(localStorage.getItem('shanhai-chart-draft')||'null');}catch{}
+    let draft;try{draft=JSON.parse(settingsStorage.getItem('shanhai-chart-draft')||'null');}catch{}
     collaboration.start(snapshot);if(connection.role!=='reader'&&draft?.base?.state&&draft?.local){const merged=mergeChartStates(draft.base.state,draft.local,snapshot.state);collaboration.conflicts=[...new Set([...(draft.conflicts||[]),...merged.conflicts])];applySharedChart(merged.state);collaborationChanged(collaboration);collaboration.schedule();}
-    refreshWatchlist();
+    workspaceSync=new WorkspaceSync({api,capture:captureWorkspaceSettings,apply:applyWorkspaceSettings,changed:renderWorkspaceSyncStatus,storage:settingsStorage,actor,canEdit:connection.role!=='reader'});
+    workspaceSync.start(settingsSnapshot);
+    window.addEventListener('online',()=>void workspaceSync.refresh());
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden){void workspaceSync.refresh();void collaboration?.refresh();}});
+    window.addEventListener('pagehide',()=>workspaceSync.backup());
+    refreshWatchlist();scheduleSave();
     if(['pyth','gold'].includes(new URLSearchParams(location.search).get('settings')))openPythSettings();
+    if(new URLSearchParams(location.search).get('settings')==='sync')openWorkspaceSync();
   }catch(error){if(error.status===401){showLogin();return;}$('#chart-message').classList.remove('hidden');$('#chart-message').textContent=`启动失败：${error.message}。请确认本地服务正在运行。`;console.error(error);}
 }
 boot();

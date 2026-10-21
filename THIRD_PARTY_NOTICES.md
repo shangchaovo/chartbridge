@@ -2,7 +2,7 @@
 
 本项目源代码按 GNU AGPL v3 提供，完整文本见 `LICENSE`。项目未包含 TradingView 专有图表库、私有 Pine 脚本或付费指标源码。
 
-- **KLineCharts 9.8.12** — Copyright liihuu and contributors，Apache-2.0。来源：https://github.com/klinecharts/KLineChart 。完整许可证见 `licenses/KLineCharts-Apache-2.0.txt`，上游 NOTICE 原样保留于 `licenses/KLineCharts-NOTICE.txt`。本地分发将 `process.env.NODE_ENV` 替换为 `"production"`，并在构建时应用 `scripts/patch-klinecharts.mjs`：修正快速点击丢弃第二个锚点的问题；固定锚点绘图中的双击按一次锚点处理，避免过早结束并生成无法恢复的图形。非绘图状态的双击行为保留。
+- **KLineCharts 9.8.12** — Copyright liihuu and contributors，Apache-2.0。来源：https://github.com/klinecharts/KLineChart 。完整许可证见 `licenses/KLineCharts-Apache-2.0.txt`，上游 NOTICE 原样保留于 `licenses/KLineCharts-NOTICE.txt`。本地分发将 `process.env.NODE_ENV` 替换为 `"production"`，并在构建时应用 `scripts/patch-klinecharts.mjs`：修正快速点击丢弃第二个锚点的问题；固定锚点绘图中的双击按一次锚点处理，避免过早结束并生成无法恢复的图形。路径和折线的双击仍结束绘制，并去掉尚未点击的预览点；已保存的路径在载入时直接完成，不会重新进入绘制。非绘图状态的双击行为保留。
 - **PineTS 0.11.1** — Copyright LuxAlgo，AGPL-3.0-only。来源：https://github.com/LuxAlgo/PineTS 。完整许可证见 `licenses/PineTS-AGPL-3.0.txt`。使用官方 browser ES 构建；当前本地适配器限制输入数据范围及绘图方式。上游另提供商业许可，该许可并未包含在本项目中。
 - **REA / rea-agents 6.5.0** — Copyright REA contributors，MIT。来源：https://github.com/morluto/rea 。仅作为独立研究工具安装在 `tools/`，不参与终端运行。完整许可证见 `licenses/REA-MIT.txt`。
 - **Acorn / acorn-walk / Astring** — MIT，PineTS 的解析与代码生成依赖。许可证原样保留于 `licenses/`。

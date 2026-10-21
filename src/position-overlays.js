@@ -21,8 +21,8 @@ export function registerPositionOverlays(register,context={}){
    const initial=initialPositionPoints(points[0],direction,{tick:s.tickSize,...geometry});points.splice(0,points.length,...initial);
   },
   onPressedMoveStart:({overlay,figureKey,...event})=>{
-   if(overlay.lock)return false;
    context.select?.(overlay);
+   if(overlay.lock)return false;
    const points=context.resolvePoints?.(overlay.points)||overlay.points.map(p=>({...p}));
    drags.set(overlay,{points,key:figureKey,origin:context.point?.(event)});context.cursor?.(positionCursor(figureKey));return false;
   },
@@ -37,12 +37,12 @@ export function registerPositionOverlays(register,context={}){
    try{r=calculatePosition({direction,entry,stop,target,settings:s,mark:context.mark?.()});}catch{return [];}
    const x=Math.min(coordinates[0].x,coordinates[2].x),right=Math.max(coordinates[0].x,coordinates[2].x),width=Math.max(12,right-x),center=x+width/2;
    const ey=yAxis.convertToPixel(entry),sy=yAxis.convertToPixel(stop),ty=yAxis.convertToPixel(target);
-   const selected=context.selected?.()===overlay.id,drawing=overlay.isDrawing?.(),active=selected||drawing;
+   const selected=context.selected?.()===overlay.id,drawing=overlay.isDrawing?.(),hovered=context.hovered?.()===overlay.id,active=selected||drawing||hovered;
    const alpha=Math.round(s.fillOpacity/100*255).toString(16).padStart(2,'0');
    const figures=[{key:POSITION_HANDLES.body,type:'rect',attrs:{x,y:Math.min(ey,ty),width,height:Math.abs(ty-ey)},styles:{style:'stroke_fill',color:s.targetColor+alpha,borderColor:s.targetColor,borderSize:s.lineWidth}},
     {key:POSITION_HANDLES.body,type:'rect',attrs:{x,y:Math.min(ey,sy),width,height:Math.abs(sy-ey)},styles:{style:'stroke_fill',color:s.stopColor+alpha,borderColor:s.stopColor,borderSize:s.lineWidth}},
     {key:POSITION_HANDLES.body,type:'line',attrs:{coordinates:[{x,y:ey},{x:right,y:ey}]},styles:{color:s.lineColor,size:s.lineWidth,style:'solid'}}];
-   if(s.showStats&&(s.alwaysShowStats||selected||drawing)){
+   if(s.showStats&&(s.alwaysShowStats||active)){
     const compact=s.compact||bounding.width<500,precision=context.precision?.()??2;
     const edge=(label,price,percent,ticks,amount)=>label+': '+number(Math.abs(price-entry),precision)+(s.showPercent?' ('+number(percent,2)+'%)':'')+(!compact&&s.showTicks?' '+number(ticks,2):'')+(!compact&&s.showAmount?', 金额: '+number(amount,2):'');
     const targetText=edge('目标',target,r.targetPercent,r.targetTicks,s.accountSize+r.reward),stopText=edge('止损',stop,r.stopPercent,r.stopTicks,s.accountSize-r.risk);
